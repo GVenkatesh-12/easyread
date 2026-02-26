@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.PROD
-    ? (import.meta.env.VITE_API_URL || '/api')
+    ? (import.meta.env.VITE_API_URL || 'https://api-ebook.duckdns.org')
     : '/api';
 
 async function request<T>(
