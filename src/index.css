@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+/* ── Design Tokens (Google-inspired) ─────────────────────────── */
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  --color-bg: #f8f9fa;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f3f4;
+  --color-text: #202124;
+  --color-text-secondary: #5f6368;
+  --color-border: #dadce0;
+  --color-accent: #1a73e8;
+  --color-accent-hover: #1765cc;
+  --color-accent-soft: rgba(26, 115, 232, 0.08);
+  --color-danger: #d93025;
+  --color-danger-hover: #c5221f;
+  --color-danger-soft: rgba(217, 48, 37, 0.08);
+  --color-success: #1e8e3e;
+  --color-warning: #f9ab00;
+
+  --shadow-1: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+  --shadow-2: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+  --shadow-3: 0 4px 8px 3px rgba(60, 64, 67, 0.15), 0 1px 3px rgba(60, 64, 67, 0.3);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+}
+
+.dark {
+  --color-bg: #202124;
+  --color-surface: #292a2d;
+  --color-surface-hover: #35363a;
+  --color-text: #e8eaed;
+  --color-text-secondary: #9aa0a6;
+  --color-border: #3c4043;
+  --color-accent: #8ab4f8;
+  --color-accent-hover: #aecbfa;
+  --color-accent-soft: rgba(138, 180, 248, 0.12);
+  --color-danger: #f28b82;
+  --color-danger-hover: #ee675c;
+  --color-danger-soft: rgba(242, 139, 130, 0.12);
+  --color-success: #81c995;
+  --color-warning: #fdd663;
+
+  --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.6), 0 1px 3px 1px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 1px 2px 0 rgba(0, 0, 0, 0.6), 0 2px 6px 2px rgba(0, 0, 0, 0.3);
+  --shadow-3: 0 4px 8px 3px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+/* ── Global Reset & Base ─────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.25s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── PDF Reading Themes (applied to canvas container) ────────── */
+.pdf-theme-default canvas { filter: none; }
+.pdf-theme-dark canvas { filter: invert(0.88) hue-rotate(180deg); }
+.pdf-theme-sepia canvas { filter: sepia(0.4) brightness(0.95) contrast(1.05); }
+.pdf-theme-warm canvas { filter: brightness(0.92) sepia(0.2) saturate(1.1); }
+.pdf-theme-blue-night canvas { filter: invert(0.88) hue-rotate(180deg) brightness(0.85) sepia(0.15); }
