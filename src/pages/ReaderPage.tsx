@@ -227,10 +227,11 @@ export default function ReaderPage() {
 
     const ZOOM_MIN = 0.5;
     const ZOOM_MAX = 2.5;
-    const ZOOM_STEP = 0.25;
+    const ZOOM_STEP = 0.05;
+    const normalizeZoom = (value: number) => Math.round(value * 100) / 100;
 
-    const zoomIn = () => setZoomLevel(z => Math.min(z + ZOOM_STEP, ZOOM_MAX));
-    const zoomOut = () => setZoomLevel(z => Math.max(z - ZOOM_STEP, ZOOM_MIN));
+    const zoomIn = () => setZoomLevel(z => normalizeZoom(Math.min(z + ZOOM_STEP, ZOOM_MAX)));
+    const zoomOut = () => setZoomLevel(z => normalizeZoom(Math.max(z - ZOOM_STEP, ZOOM_MIN)));
     const zoomPercent = Math.round(zoomLevel * 100);
 
     const handleAddNote = async () => {
