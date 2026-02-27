@@ -49,7 +49,7 @@ export default function LoginPage() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '20px',
+                padding: '16px',
                 background: 'var(--color-bg)',
             }}
         >
@@ -57,13 +57,13 @@ export default function LoginPage() {
                 onClick={toggle}
                 style={{
                     position: 'absolute',
-                    top: '16px',
-                    right: '16px',
+                    top: '12px',
+                    right: '12px',
                     background: 'transparent',
                     border: 'none',
                     borderRadius: 'var(--radius-full)',
-                    width: '40px',
-                    height: '40px',
+                    width: '36px',
+                    height: '36px',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -85,12 +85,12 @@ export default function LoginPage() {
                     maxWidth: '400px',
                     background: 'var(--color-surface)',
                     borderRadius: 'var(--radius-lg)',
-                    padding: '40px 32px',
+                    padding: 'clamp(24px, 7vw, 40px) clamp(20px, 6vw, 32px)',
                     boxShadow: 'var(--shadow-2)',
                     border: '1px solid var(--color-border)',
                 }}
             >
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '32px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 'clamp(20px, 6vw, 32px)' }}>
                     <div
                         style={{
                             width: '48px',
@@ -105,7 +105,7 @@ export default function LoginPage() {
                     >
                         <BookOpen size={24} style={{ color: 'var(--color-accent)' }} />
                     </div>
-                    <h1 style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: '4px' }}>
+                    <h1 style={{ fontSize: 'clamp(1.25rem, 5vw, 1.5rem)', fontWeight: 600, color: 'var(--color-text)', marginBottom: '4px' }}>
                         Welcome back
                     </h1>
                     <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from './Toast';
@@ -33,6 +33,13 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
     } | null>(null);
     const [lookupError, setLookupError] = useState('');
     const [addingLookupWord, setAddingLookupWord] = useState(false);
+    const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 768 : false));
+
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth <= 768);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     const handleChangePassword = async () => {
         if (!oldPassword || !newPassword) return;
@@ -100,12 +107,13 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
         }
     };
 
+    const iconSize = isMobile ? 18 : 20;
     const iconBtn: React.CSSProperties = {
         background: 'transparent',
         border: 'none',
         borderRadius: 'var(--radius-full)',
-        width: '40px',
-        height: '40px',
+        width: isMobile ? '36px' : '40px',
+        height: isMobile ? '36px' : '40px',
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -134,13 +142,14 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                     position: 'sticky',
                     top: 0,
                     zIndex: 50,
-                    padding: '0 16px',
+                    padding: isMobile ? '0 10px' : '0 16px',
                     height: '56px',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '8px',
+                    gap: isMobile ? '4px' : '8px',
                     background: 'var(--color-surface)',
                     borderBottom: '1px solid var(--color-border)',
+                    overflow: 'hidden',
                 }}
             >
                 {showBack && (
@@ -151,26 +160,48 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                         aria-label="Go back"
                     >
-                        <ArrowLeft size={20} />
+                        <ArrowLeft size={iconSize} />
                     </button>
                 )}
 
                 {!showBack && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '4px' }}>
-                        <BookOpen size={22} style={{ color: 'var(--color-accent)' }} />
-                        <span style={{ fontWeight: 600, fontSize: '1.125rem', color: 'var(--color-text)' }}>
-                            {title}
-                        </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '4px', flexShrink: 0 }}>
+                        <BookOpen size={isMobile ? 20 : 22} style={{ color: 'var(--color-accent)' }} />
+                        {(!isMobile || !children) && (
+                            <span style={{ fontWeight: 600, fontSize: '1.125rem', color: 'var(--color-text)' }}>
+                                {title}
+                            </span>
+                        )}
                     </div>
                 )}
 
                 {showBack && (
-                    <span style={{ fontWeight: 500, fontSize: '1rem', color: 'var(--color-text)' }}>
+                    <span
+                        style={{
+                            flex: 1,
+                            minWidth: 0,
+                            fontWeight: 500,
+                            fontSize: isMobile ? '0.9rem' : '1rem',
+                            color: 'var(--color-text)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                        }}
+                    >
                         {title}
                     </span>
                 )}
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        flex: showBack ? undefined : 1,
+                        minWidth: showBack ? undefined : 0,
+                        marginLeft: showBack ? 0 : (isMobile ? '4px' : '12px'),
+                    }}
+                >
                     {onAddVocabFromLookup && (
                         <button
                             onClick={() => setShowDictionaryModal(true)}
@@ -179,14 +210,14 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                             aria-label="Lookup word meaning"
                         >
-                            <Search size={20} />
+                            <Search size={iconSize} />
                         </button>
                     )}
 
                     {children}
                 </div>
 
-                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: isMobile ? '2px' : '4px' }}>
                     <button
                         onClick={toggle}
                         style={iconBtn}
@@ -194,7 +225,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                         aria-label="Toggle theme"
                     >
-                        {isDark ? <Sun size={20} /> : <Moon size={20} />}
+                        {isDark ? <Sun size={iconSize} /> : <Moon size={iconSize} />}
                     </button>
 
                     {isAuthenticated && (
@@ -206,7 +237,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                 aria-label="Change password"
                             >
-                                <KeyRound size={20} />
+                                <KeyRound size={iconSize} />
                             </button>
                             <button
                                 onClick={() => { logout(); navigate('/login'); }}
@@ -215,7 +246,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                 aria-label="Logout"
                             >
-                                <LogOut size={20} />
+                                <LogOut size={iconSize} />
                             </button>
                         </>
                     )}
@@ -232,7 +263,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         alignItems: 'center',
                         justifyContent: 'center',
                         zIndex: 100,
-                        padding: '20px',
+                        padding: isMobile ? '12px' : '20px',
                     }}
                     onClick={(e) => { if (e.target === e.currentTarget) closeDictionaryModal(); }}
                 >
@@ -241,7 +272,9 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         style={{
                             width: '100%',
                             maxWidth: '460px',
-                            padding: '24px',
+                            maxHeight: 'calc(100vh - 24px)',
+                            overflowY: 'auto',
+                            padding: isMobile ? '18px' : '24px',
                             borderRadius: 'var(--radius-lg)',
                             background: 'var(--color-surface)',
                             boxShadow: 'var(--shadow-3)',
@@ -262,7 +295,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                             </button>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '8px', marginBottom: '12px' }}>
                             <input
                                 autoFocus
                                 value={lookupWord}
@@ -277,7 +310,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                                 onClick={handleLookupWord}
                                 disabled={lookupLoading || !lookupWord.trim()}
                                 style={{
-                                    padding: '0 16px',
+                                    padding: isMobile ? '10px 16px' : '0 16px',
                                     borderRadius: 'var(--radius-full)',
                                     background: 'var(--color-accent)',
                                     color: '#fff',
@@ -290,7 +323,8 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: '6px',
-                                    minWidth: '100px',
+                                    minWidth: isMobile ? 'unset' : '100px',
+                                    width: isMobile ? '100%' : 'auto',
                                 }}
                             >
                                 {lookupLoading ? (
@@ -372,7 +406,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         alignItems: 'center',
                         justifyContent: 'center',
                         zIndex: 100,
-                        padding: '20px',
+                        padding: isMobile ? '12px' : '20px',
                     }}
                     onClick={(e) => { if (e.target === e.currentTarget) setShowPasswordModal(false); }}
                 >
@@ -381,7 +415,9 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                         style={{
                             width: '100%',
                             maxWidth: '400px',
-                            padding: '24px',
+                            maxHeight: 'calc(100vh - 24px)',
+                            overflowY: 'auto',
+                            padding: isMobile ? '18px' : '24px',
                             borderRadius: 'var(--radius-lg)',
                             background: 'var(--color-surface)',
                             boxShadow: 'var(--shadow-3)',

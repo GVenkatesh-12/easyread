@@ -26,6 +26,7 @@ export default function LibraryPage() {
     const [uploadTitle, setUploadTitle] = useState('');
     const [uploading, setUploading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+    const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 768 : false));
     const fileRef = useRef<HTMLInputElement>(null);
 
     const loadBooks = useCallback(async () => {
@@ -43,6 +44,12 @@ export default function LibraryPage() {
     useEffect(() => {
         loadBooks();
     }, [loadBooks]);
+
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth <= 768);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     const handleUpload = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -96,9 +103,10 @@ export default function LibraryPage() {
                 <div
                     style={{
                         position: 'relative',
-                        flex: '1',
+                        flex: '1 1 auto',
+                        minWidth: 0,
                         maxWidth: '480px',
-                        marginLeft: '16px',
+                        marginLeft: isMobile ? '0' : '4px',
                     }}
                 >
                     <Search
@@ -113,7 +121,7 @@ export default function LibraryPage() {
                     />
                     <input
                         type="text"
-                        placeholder="Search books..."
+                        placeholder={isMobile ? 'Search...' : 'Search books...'}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         style={{
@@ -140,10 +148,10 @@ export default function LibraryPage() {
                 </div>
             </Navbar>
 
-            <main style={{ padding: '24px 24px', maxWidth: '1200px', margin: '0 auto' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+            <main style={{ padding: isMobile ? '16px' : '24px', maxWidth: '1200px', margin: '0 auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isMobile ? '16px' : '24px' }}>
                     <div>
-                        <h2 style={{ fontSize: '1.375rem', fontWeight: 600, color: 'var(--color-text)' }}>
+                        <h2 style={{ fontSize: isMobile ? '1.2rem' : '1.375rem', fontWeight: 600, color: 'var(--color-text)' }}>
                             My Library
                         </h2>
                         <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: '2px' }}>
@@ -206,7 +214,7 @@ export default function LibraryPage() {
                     <div
                         style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                            gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 220 : 260}px, 1fr))`,
                             gap: '16px',
                         }}
                     >
@@ -369,10 +377,10 @@ export default function LibraryPage() {
                     onClick={() => setShowUpload(true)}
                     style={{
                         position: 'fixed',
-                        bottom: '24px',
-                        right: '24px',
-                        width: '56px',
-                        height: '56px',
+                        bottom: isMobile ? '16px' : '24px',
+                        right: isMobile ? '16px' : '24px',
+                        width: isMobile ? '52px' : '56px',
+                        height: isMobile ? '52px' : '56px',
                         borderRadius: 'var(--radius-full)',
                         border: 'none',
                         cursor: 'pointer',
@@ -404,7 +412,7 @@ export default function LibraryPage() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         zIndex: 100,
-                        padding: '20px',
+                        padding: isMobile ? '12px' : '20px',
                     }}
                     onClick={() => !uploading && setShowUpload(false)}
                 >
@@ -414,9 +422,11 @@ export default function LibraryPage() {
                         style={{
                             background: 'var(--color-surface)',
                             borderRadius: 'var(--radius-lg)',
-                            padding: '28px',
+                            padding: isMobile ? '20px' : '28px',
                             width: '100%',
                             maxWidth: '440px',
+                            maxHeight: 'calc(100vh - 24px)',
+                            overflowY: 'auto',
                             boxShadow: 'var(--shadow-3)',
                         }}
                     >
@@ -533,7 +543,7 @@ export default function LibraryPage() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         zIndex: 100,
-                        padding: '20px',
+                        padding: isMobile ? '12px' : '20px',
                     }}
                     onClick={() => setDeleteConfirm(null)}
                 >
@@ -543,9 +553,11 @@ export default function LibraryPage() {
                         style={{
                             background: 'var(--color-surface)',
                             borderRadius: 'var(--radius-lg)',
-                            padding: '28px',
+                            padding: isMobile ? '20px' : '28px',
                             maxWidth: '360px',
                             width: '100%',
+                            maxHeight: 'calc(100vh - 24px)',
+                            overflowY: 'auto',
                             boxShadow: 'var(--shadow-3)',
                             textAlign: 'center',
                         }}

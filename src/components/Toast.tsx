@@ -35,13 +35,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div
                 style={{
                     position: 'fixed',
-                    bottom: '24px',
-                    right: '24px',
+                    bottom: 'calc(12px + env(safe-area-inset-bottom))',
+                    right: '12px',
                     zIndex: 9999,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '8px',
-                    maxWidth: '400px',
+                    width: 'min(400px, calc(100vw - 24px))',
                 }}
             >
                 {toasts.map((toast) => (

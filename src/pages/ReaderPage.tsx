@@ -62,6 +62,7 @@ export default function ReaderPage() {
     const [maxPageWidth, setMaxPageWidth] = useState(0);
     const [pageInput, setPageInput] = useState('1');
     const [isNarrowViewport, setIsNarrowViewport] = useState(false);
+    const [isMobileViewport, setIsMobileViewport] = useState(false);
 
     const [showNotes, setShowNotes] = useState(false);
     const [showVocab, setShowVocab] = useState(false);
@@ -104,7 +105,10 @@ export default function ReaderPage() {
     }, [bookId]);
 
     useEffect(() => {
-        const updateViewport = () => setIsNarrowViewport(window.innerWidth <= 1024);
+        const updateViewport = () => {
+            setIsNarrowViewport(window.innerWidth <= 1024);
+            setIsMobileViewport(window.innerWidth <= 768);
+        };
         updateViewport();
         window.addEventListener('resize', updateViewport);
         return () => window.removeEventListener('resize', updateViewport);
@@ -137,11 +141,22 @@ export default function ReaderPage() {
         try {
             const page = await pdfDoc.getPage(currentPage);
             const container = containerRef.current;
-            const containerWidth = container.clientWidth - 40;
-            const effectiveWidth = maxPageWidth > 0 ? Math.min(containerWidth, maxPageWidth) : containerWidth;
+            const horizontalInset = isMobileViewport ? 16 : 40;
+            const containerWidth = Math.max(container.clientWidth - horizontalInset, 180);
+            const effectiveWidth = maxPageWidth > 0 && !isMobileViewport
+                ? Math.min(containerWidth, maxPageWidth)
+                : containerWidth;
             const viewport = page.getViewport({ scale: 1 });
             const fitScale = effectiveWidth / viewport.width;
-            const scale = fitScale * zoomLevel;
+            let baseScale = fitScale;
+            if (isMobileViewport) {
+                const reservedHeight = 140;
+                const availableHeight = Math.max(container.clientHeight - reservedHeight, 180);
+                const fitHeightScale = availableHeight / viewport.height;
+                // On phones, prefer filling vertical space even if this introduces horizontal scroll.
+                baseScale = Math.max(fitScale, fitHeightScale);
+            }
+            const scale = baseScale * zoomLevel;
             const scaledViewport = page.getViewport({ scale });
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d')!;
@@ -153,7 +168,7 @@ export default function ReaderPage() {
         } finally {
             setRendering(false);
         }
-    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth]);
+    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth, isMobileViewport]);
 
     useEffect(() => { renderPage(); }, [renderPage]);
 
@@ -330,8 +345,8 @@ export default function ReaderPage() {
         background: active ? 'var(--color-accent-soft)' : 'transparent',
         border: 'none',
         borderRadius: 'var(--radius-full)',
-        width: '36px',
-        height: '36px',
+        width: isMobileViewport ? '32px' : '36px',
+        height: isMobileViewport ? '32px' : '36px',
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -353,6 +368,7 @@ export default function ReaderPage() {
 
     const readingPercent = totalPages > 0 ? Math.round((currentPage / totalPages) * 100) : 0;
     const showOverlayPanel = isNarrowViewport && (showNotes || showVocab);
+    const toolbarIconSize = isMobileViewport ? 16 : 18;
 
     const commitPageInput = () => {
         const parsed = parseInt(pageInput, 10);
@@ -371,7 +387,7 @@ export default function ReaderPage() {
                 showBack
                 onAddVocabFromLookup={addVocabEntry}
             >
-                <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
+                <div style={{ display: 'flex', gap: '4px', marginLeft: isMobileViewport ? '2px' : '8px' }}>
                     <div ref={themePickerRef} style={{ position: 'relative' }}>
                         <button
                             onClick={() => { setShowThemePicker(!showThemePicker); setShowNotes(false); setShowVocab(false); }}
@@ -380,7 +396,7 @@ export default function ReaderPage() {
                             onMouseLeave={e => { if (!showThemePicker) e.currentTarget.style.background = 'transparent'; }}
                             aria-label="Reading theme"
                         >
-                            <Palette size={18} />
+                            <Palette size={toolbarIconSize} />
                         </button>
 
                         {showThemePicker && (
@@ -397,7 +413,7 @@ export default function ReaderPage() {
                                     padding: '4px',
                                     boxShadow: 'var(--shadow-2)',
                                     zIndex: 60,
-                                    minWidth: '180px',
+                                    minWidth: isMobileViewport ? '160px' : '180px',
                                 }}
                             >
                                 <p style={{ fontSize: '0.7rem', fontWeight: 500, color: 'var(--color-text-secondary)', padding: '8px 12px 4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -451,7 +467,7 @@ export default function ReaderPage() {
                         onMouseLeave={e => { if (!showNotes) e.currentTarget.style.background = 'transparent'; }}
                         aria-label="Notes"
                     >
-                        <StickyNote size={18} />
+                        <StickyNote size={toolbarIconSize} />
                         {notes.length > 0 && (
                             <span style={{
                                 position: 'absolute', top: '0', right: '0',
@@ -472,7 +488,7 @@ export default function ReaderPage() {
                         onMouseLeave={e => { if (!showVocab) e.currentTarget.style.background = 'transparent'; }}
                         aria-label="Vocabulary"
                     >
-                        <BookA size={18} />
+                        <BookA size={toolbarIconSize} />
                         {vocab.length > 0 && (
                             <span style={{
                                 position: 'absolute', top: '0', right: '0',
@@ -497,9 +513,9 @@ export default function ReaderPage() {
                         minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
-                        alignItems: 'center',
+                        alignItems: isMobileViewport ? 'flex-start' : 'center',
                         overflow: 'auto',
-                        padding: isNarrowViewport ? '12px' : '20px',
+                        padding: isMobileViewport ? '8px' : (isNarrowViewport ? '12px' : '20px'),
                         background: pdfTheme === 'dark' || pdfTheme === 'blue-night' ? '#1a1a2e' : 'var(--color-bg)',
                         transition: 'background 0.2s',
                     }}
@@ -538,7 +554,7 @@ export default function ReaderPage() {
                             <canvas
                                 ref={canvasRef}
                                 style={{
-                                    maxWidth: '100%',
+                                    maxWidth: isMobileViewport ? 'none' : '100%',
                                     borderRadius: 'var(--radius-sm)',
                                     boxShadow: 'var(--shadow-1)',
                                 }}
@@ -550,10 +566,11 @@ export default function ReaderPage() {
                                     display: 'flex',
                                     alignItems: 'center',
                                     flexWrap: isNarrowViewport ? 'wrap' : 'nowrap',
-                                    justifyContent: 'center',
-                                    gap: '6px',
-                                    padding: '6px 10px',
-                                    borderRadius: 'var(--radius-full)',
+                                    justifyContent: isMobileViewport ? 'space-between' : 'center',
+                                    gap: isMobileViewport ? '4px' : '6px',
+                                    width: isMobileViewport ? '100%' : 'auto',
+                                    padding: isMobileViewport ? '8px' : '6px 10px',
+                                    borderRadius: isMobileViewport ? 'var(--radius-md)' : 'var(--radius-full)',
                                     marginTop: '16px',
                                     background: 'var(--color-surface)',
                                     boxShadow: 'var(--shadow-2)',
@@ -569,7 +586,7 @@ export default function ReaderPage() {
                                         border: 'none',
                                         borderRadius: 'var(--radius-full)',
                                         height: '32px',
-                                        padding: '0 10px',
+                                        padding: isMobileViewport ? '0 8px' : '0 10px',
                                         cursor: 'pointer',
                                         display: 'flex',
                                         alignItems: 'center',
@@ -585,10 +602,12 @@ export default function ReaderPage() {
                                     aria-label="Toggle page width"
                                 >
                                     <Columns2 size={15} />
-                                    {currentWidthLabel}
+                                    {!isMobileViewport && currentWidthLabel}
                                 </button>
 
-                                <div style={{ width: '1px', height: '20px', background: 'var(--color-border)', flexShrink: 0 }} />
+                                {!isMobileViewport && (
+                                    <div style={{ width: '1px', height: '20px', background: 'var(--color-border)', flexShrink: 0 }} />
+                                )}
 
                                 {/* Page navigation */}
                                 <button
@@ -623,7 +642,7 @@ export default function ReaderPage() {
                                         onBlur={commitPageInput}
                                         onKeyDown={(e) => { if (e.key === 'Enter') commitPageInput(); }}
                                         style={{
-                                            width: '46px',
+                                            width: isMobileViewport ? '52px' : '46px',
                                             padding: '3px',
                                             textAlign: 'center',
                                             background: 'var(--color-bg)',
@@ -666,7 +685,9 @@ export default function ReaderPage() {
                                     <Loader2 size={14} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
                                 )}
 
-                                <div style={{ width: '1px', height: '20px', background: 'var(--color-border)', flexShrink: 0 }} />
+                                {!isMobileViewport && (
+                                    <div style={{ width: '1px', height: '20px', background: 'var(--color-border)', flexShrink: 0 }} />
+                                )}
 
                                 {/* Zoom controls */}
                                 <button
@@ -733,16 +754,18 @@ export default function ReaderPage() {
                                     <Plus size={15} />
                                 </button>
 
-                                <span
-                                    style={{
-                                        fontSize: '0.7rem',
-                                        color: 'var(--color-text-secondary)',
-                                        marginLeft: '4px',
-                                        whiteSpace: 'nowrap',
-                                    }}
-                                >
-                                    ←/→ keys
-                                </span>
+                                {!isMobileViewport && (
+                                    <span
+                                        style={{
+                                            fontSize: '0.7rem',
+                                            color: 'var(--color-text-secondary)',
+                                            marginLeft: '4px',
+                                            whiteSpace: 'nowrap',
+                                        }}
+                                    >
+                                        ←/→ keys
+                                    </span>
+                                )}
                             </div>
                         </>
                     )}
