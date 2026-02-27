@@ -141,7 +141,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                 style={{
                     position: 'sticky',
                     top: 0,
-                    zIndex: 50,
+                    zIndex: 80,
                     padding: isMobile ? '0 10px' : '0 16px',
                     height: '56px',
                     display: 'flex',
@@ -149,7 +149,6 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                     gap: isMobile ? '4px' : '8px',
                     background: 'var(--color-surface)',
                     borderBottom: '1px solid var(--color-border)',
-                    overflow: 'hidden',
                 }}
             >
                 {showBack && (

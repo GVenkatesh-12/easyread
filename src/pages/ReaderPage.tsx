@@ -421,7 +421,7 @@ export default function ReaderPage() {
                                     borderRadius: 'var(--radius-sm)',
                                     padding: '4px',
                                     boxShadow: 'var(--shadow-2)',
-                                    zIndex: 60,
+                                    zIndex: 140,
                                     minWidth: isMobileViewport ? '160px' : '180px',
                                 }}
                             >
