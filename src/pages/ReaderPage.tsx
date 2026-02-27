@@ -60,6 +60,8 @@ export default function ReaderPage() {
     const [showThemePicker, setShowThemePicker] = useState(false);
     const [zoomLevel, setZoomLevel] = useState(1.0);
     const [maxPageWidth, setMaxPageWidth] = useState(0);
+    const [pageInput, setPageInput] = useState('1');
+    const [isNarrowViewport, setIsNarrowViewport] = useState(false);
 
     const [showNotes, setShowNotes] = useState(false);
     const [showVocab, setShowVocab] = useState(false);
@@ -80,6 +82,7 @@ export default function ReaderPage() {
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const themePickerRef = useRef<HTMLDivElement>(null);
     const progressTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -99,6 +102,17 @@ export default function ReaderPage() {
             }
         })();
     }, [bookId]);
+
+    useEffect(() => {
+        const updateViewport = () => setIsNarrowViewport(window.innerWidth <= 1024);
+        updateViewport();
+        window.addEventListener('resize', updateViewport);
+        return () => window.removeEventListener('resize', updateViewport);
+    }, []);
+
+    useEffect(() => {
+        setPageInput(String(currentPage));
+    }, [currentPage]);
 
     useEffect(() => {
         if (!book) return;
@@ -148,6 +162,17 @@ export default function ReaderPage() {
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, [renderPage]);
+
+    useEffect(() => {
+        const handleOutsideClick = (e: MouseEvent) => {
+            if (!themePickerRef.current) return;
+            if (!themePickerRef.current.contains(e.target as Node)) {
+                setShowThemePicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }, []);
 
     useEffect(() => {
         if (!bookId || !totalPages) return;
@@ -260,6 +285,11 @@ export default function ReaderPage() {
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.key === 'Escape') {
+                setShowThemePicker(false);
+                setShowNotes(false);
+                setShowVocab(false);
+            }
             if (e.key === 'ArrowLeft') goToPage(currentPage - 1);
             if (e.key === 'ArrowRight') goToPage(currentPage + 1);
         };
@@ -305,11 +335,24 @@ export default function ReaderPage() {
         transition: 'background 0.15s',
     };
 
+    const readingPercent = totalPages > 0 ? Math.round((currentPage / totalPages) * 100) : 0;
+    const showOverlayPanel = isNarrowViewport && (showNotes || showVocab);
+
+    const commitPageInput = () => {
+        const parsed = parseInt(pageInput, 10);
+        if (Number.isNaN(parsed)) {
+            setPageInput(String(currentPage));
+            return;
+        }
+        goToPage(parsed);
+        setPageInput(String(Math.max(1, Math.min(parsed, totalPages || 1))));
+    };
+
     return (
         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
             <Navbar title={book?.title || 'Loading...'} showBack>
                 <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
-                    <div style={{ position: 'relative' }}>
+                    <div ref={themePickerRef} style={{ position: 'relative' }}>
                         <button
                             onClick={() => { setShowThemePicker(!showThemePicker); setShowNotes(false); setShowVocab(false); }}
                             style={toolbarBtn(showThemePicker)}
@@ -435,11 +478,34 @@ export default function ReaderPage() {
                         flexDirection: 'column',
                         alignItems: 'center',
                         overflow: 'auto',
-                        padding: '20px',
+                        padding: isNarrowViewport ? '12px' : '20px',
                         background: pdfTheme === 'dark' || pdfTheme === 'blue-night' ? '#1a1a2e' : 'var(--color-bg)',
                         transition: 'background 0.2s',
                     }}
                 >
+                    {!loading && pdfDoc && (
+                        <div
+                            style={{
+                                width: '100%',
+                                maxWidth: maxPageWidth || 1000,
+                                marginBottom: '10px',
+                                padding: '8px 10px',
+                                borderRadius: 'var(--radius-sm)',
+                                background: 'var(--color-surface)',
+                                border: '1px solid var(--color-border)',
+                                boxShadow: 'var(--shadow-1)',
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginBottom: '6px' }}>
+                                <span>Reading progress</span>
+                                <span>{readingPercent}%</span>
+                            </div>
+                            <div style={{ height: '6px', borderRadius: '999px', background: 'var(--color-bg)', overflow: 'hidden' }}>
+                                <div style={{ height: '100%', width: `${readingPercent}%`, borderRadius: '999px', background: 'var(--color-accent)', transition: 'width 0.2s ease' }} />
+                            </div>
+                        </div>
+                    )}
+
                     {loading && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px' }}>
                             <Loader2 size={36} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
@@ -463,6 +529,8 @@ export default function ReaderPage() {
                                     bottom: '16px',
                                     display: 'flex',
                                     alignItems: 'center',
+                                    flexWrap: isNarrowViewport ? 'wrap' : 'nowrap',
+                                    justifyContent: 'center',
                                     gap: '6px',
                                     padding: '6px 10px',
                                     borderRadius: 'var(--radius-full)',
@@ -530,11 +598,10 @@ export default function ReaderPage() {
                                         type="number"
                                         min={1}
                                         max={totalPages}
-                                        value={currentPage}
-                                        onChange={(e) => {
-                                            const p = parseInt(e.target.value);
-                                            if (!isNaN(p)) goToPage(p);
-                                        }}
+                                        value={pageInput}
+                                        onChange={(e) => setPageInput(e.target.value)}
+                                        onBlur={commitPageInput}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') commitPageInput(); }}
                                         style={{
                                             width: '46px',
                                             padding: '3px',
@@ -645,17 +712,45 @@ export default function ReaderPage() {
                                 >
                                     <Plus size={15} />
                                 </button>
+
+                                <span
+                                    style={{
+                                        fontSize: '0.7rem',
+                                        color: 'var(--color-text-secondary)',
+                                        marginLeft: '4px',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
+                                    ←/→ keys
+                                </span>
                             </div>
                         </>
                     )}
                 </div>
 
+                {showOverlayPanel && (
+                    <div
+                        onClick={() => { setShowNotes(false); setShowVocab(false); }}
+                        style={{
+                            position: 'absolute',
+                            inset: 0,
+                            background: 'rgba(0, 0, 0, 0.4)',
+                            zIndex: 50,
+                        }}
+                    />
+                )}
+
                 {showNotes && (
                     <div
                         className="animate-slide-in-right"
                         style={{
-                            width: '360px',
-                            maxWidth: '90vw',
+                            width: isNarrowViewport ? '100%' : '360px',
+                            maxWidth: isNarrowViewport ? '100%' : '90vw',
+                            position: isNarrowViewport ? 'absolute' : 'relative',
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            zIndex: isNarrowViewport ? 60 : 'auto',
                             borderLeft: '1px solid var(--color-border)',
                             background: 'var(--color-surface)',
                             display: 'flex',
@@ -822,8 +917,13 @@ export default function ReaderPage() {
                     <div
                         className="animate-slide-in-right"
                         style={{
-                            width: '360px',
-                            maxWidth: '90vw',
+                            width: isNarrowViewport ? '100%' : '360px',
+                            maxWidth: isNarrowViewport ? '100%' : '90vw',
+                            position: isNarrowViewport ? 'absolute' : 'relative',
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            zIndex: isNarrowViewport ? 60 : 'auto',
                             borderLeft: '1px solid var(--color-border)',
                             background: 'var(--color-surface)',
                             display: 'flex',
