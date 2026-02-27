@@ -160,9 +160,17 @@ export default function ReaderPage() {
             const scaledViewport = page.getViewport({ scale });
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d')!;
-            canvas.width = scaledViewport.width;
-            canvas.height = scaledViewport.height;
-            await page.render({ canvasContext: ctx, canvas, viewport: scaledViewport }).promise;
+            const outputScale = window.devicePixelRatio || 1;
+            canvas.width = Math.floor(scaledViewport.width * outputScale);
+            canvas.height = Math.floor(scaledViewport.height * outputScale);
+            canvas.style.width = `${Math.floor(scaledViewport.width)}px`;
+            canvas.style.height = `${Math.floor(scaledViewport.height)}px`;
+            await page.render({
+                canvasContext: ctx,
+                canvas,
+                viewport: scaledViewport,
+                transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
+            }).promise;
         } catch (err) {
             console.error('Render error:', err);
         } finally {
