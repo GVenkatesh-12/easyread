@@ -246,16 +246,25 @@ export default function ReaderPage() {
         }
     };
 
-    const handleAddVocab = async () => {
-        if (!bookId || !vocabWord.trim() || !vocabDef.trim()) return;
+    const addVocabEntry = async (word: string, definition: string) => {
+        if (!bookId || !word.trim() || !definition.trim()) return;
         try {
-            const updatedVocab = await api.addVocab(bookId, vocabWord.trim(), vocabDef.trim());
+            const updatedVocab = await api.addVocab(bookId, word.trim(), definition.trim());
             setVocab(updatedVocab);
-            setVocabWord('');
-            setVocabDef('');
             showToast('Word added', 'success');
         } catch (err: any) {
             showToast(err.message || 'Failed to add vocabulary', 'error');
+            throw err;
+        }
+    };
+
+    const handleAddVocab = async () => {
+        try {
+            await addVocabEntry(vocabWord, vocabDef);
+            setVocabWord('');
+            setVocabDef('');
+        } catch {
+            // Error toast is handled in addVocabEntry.
         }
     };
 
@@ -292,6 +301,13 @@ export default function ReaderPage() {
             }
             if (e.key === 'ArrowLeft') goToPage(currentPage - 1);
             if (e.key === 'ArrowRight') goToPage(currentPage + 1);
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                const container = containerRef.current;
+                if (!container) return;
+                e.preventDefault();
+                const direction = e.key === 'ArrowUp' ? -1 : 1;
+                container.scrollBy({ top: direction * 120, behavior: 'smooth' });
+            }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
@@ -349,8 +365,12 @@ export default function ReaderPage() {
     };
 
     return (
-        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-            <Navbar title={book?.title || 'Loading...'} showBack>
+        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <Navbar
+                title={book?.title || 'Loading...'}
+                showBack
+                onAddVocabFromLookup={addVocabEntry}
+            >
                 <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
                     <div ref={themePickerRef} style={{ position: 'relative' }}>
                         <button
@@ -468,12 +488,13 @@ export default function ReaderPage() {
                 </div>
             </Navbar>
 
-            <div style={{ flex: 1, display: 'flex', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden' }}>
                 <div
                     ref={containerRef}
                     className={`pdf-theme-${pdfTheme}`}
                     style={{
                         flex: 1,
+                        minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
@@ -525,8 +546,7 @@ export default function ReaderPage() {
 
                             <div
                                 style={{
-                                    position: 'sticky',
-                                    bottom: '16px',
+                                    position: 'relative',
                                     display: 'flex',
                                     alignItems: 'center',
                                     flexWrap: isNarrowViewport ? 'wrap' : 'nowrap',
@@ -755,6 +775,7 @@ export default function ReaderPage() {
                             background: 'var(--color-surface)',
                             display: 'flex',
                             flexDirection: 'column',
+                            minHeight: 0,
                             overflow: 'hidden',
                         }}
                     >
@@ -816,7 +837,7 @@ export default function ReaderPage() {
                             </button>
                         </div>
 
-                        <div style={{ flex: 1, overflow: 'auto', padding: '8px' }}>
+                        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px' }}>
                             {notes.length === 0 && (
                                 <p style={{ textAlign: 'center', color: 'var(--color-text-secondary)', padding: '24px', fontSize: '0.85rem' }}>
                                     No notes yet. Add your first note above.
@@ -928,6 +949,7 @@ export default function ReaderPage() {
                             background: 'var(--color-surface)',
                             display: 'flex',
                             flexDirection: 'column',
+                            minHeight: 0,
                             overflow: 'hidden',
                         }}
                     >
@@ -988,7 +1010,7 @@ export default function ReaderPage() {
                             </button>
                         </div>
 
-                        <div style={{ flex: 1, overflow: 'auto', padding: '8px' }}>
+                        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px' }}>
                             {vocab.length === 0 && (
                                 <p style={{ textAlign: 'center', color: 'var(--color-text-secondary)', padding: '24px', fontSize: '0.85rem' }}>
                                     No vocabulary yet. Add words you learn.

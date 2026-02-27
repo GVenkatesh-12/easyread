@@ -139,6 +139,43 @@ export async function deleteVocab(bookId: string, vocabId: string) {
     });
 }
 
+/* ── Dictionary ──────────────────────────────────────────────── */
+interface DictionaryEntry {
+    meanings?: Array<{
+        partOfSpeech?: string;
+        definitions?: Array<{
+            definition?: string;
+        }>;
+    }>;
+}
+
+export async function lookupWordDefinition(word: string) {
+    const trimmed = word.trim().toLowerCase();
+    if (!trimmed) {
+        throw new Error('Word is required');
+    }
+
+    const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(trimmed)}`);
+    if (!response.ok) {
+        throw new Error('Word not found');
+    }
+
+    const data = (await response.json()) as DictionaryEntry[];
+    const firstEntry = data[0];
+    const firstMeaning = firstEntry?.meanings?.find((meaning) => meaning.definitions?.length);
+    const firstDefinition = firstMeaning?.definitions?.[0]?.definition;
+
+    if (!firstDefinition) {
+        throw new Error('Definition not found');
+    }
+
+    return {
+        word: trimmed,
+        definition: firstDefinition,
+        partOfSpeech: firstMeaning?.partOfSpeech || '',
+    };
+}
+
 /* ── Notes ────────────────────────────────────────────────────── */
 export async function getNotes(bookId: string) {
     return request<Note[]>(`/books/${bookId}/notes`);
