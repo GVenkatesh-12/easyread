@@ -108,16 +108,20 @@ export default function ReaderPage() {
     const [showVocab, setShowVocab] = useState(false);
     const [notes, setNotes] = useState<Note[]>([]);
     const [vocab, setVocab] = useState<VocabEntry[]>([]);
+    const [addingNote, setAddingNote] = useState(false);
+    const [addingVocab, setAddingVocab] = useState(false);
 
     const [noteTitle, setNoteTitle] = useState('');
     const [noteContent, setNoteContent] = useState('');
     const [editingNote, setEditingNote] = useState<string | null>(null);
+    const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
     const [editTitle, setEditTitle] = useState('');
     const [editContent, setEditContent] = useState('');
 
     const [vocabWord, setVocabWord] = useState('');
     const [vocabDef, setVocabDef] = useState('');
     const [editingVocab, setEditingVocab] = useState<string | null>(null);
+    const [deletingVocabId, setDeletingVocabId] = useState<string | null>(null);
     const [editVocabWord, setEditVocabWord] = useState('');
     const [editVocabDef, setEditVocabDef] = useState('');
 
@@ -543,6 +547,7 @@ export default function ReaderPage() {
 
     const handleAddNote = async () => {
         if (!bookId || !noteTitle.trim() || !noteContent.trim()) return;
+        setAddingNote(true);
         try {
             const note = await api.addNote(bookId, noteTitle.trim(), noteContent.trim());
             setNotes((prev) => [note, ...prev]);
@@ -551,6 +556,8 @@ export default function ReaderPage() {
             showToast('Note added', 'success');
         } catch (err: any) {
             showToast(err.message || 'Failed to add note', 'error');
+        } finally {
+            setAddingNote(false);
         }
     };
 
@@ -568,12 +575,15 @@ export default function ReaderPage() {
 
     const handleDeleteNote = async (noteId: string) => {
         if (!bookId) return;
+        setDeletingNoteId(noteId);
         try {
             await api.deleteNote(bookId, noteId);
             setNotes((prev) => prev.filter((n) => n._id !== noteId));
             showToast('Note deleted', 'success');
         } catch (err: any) {
             showToast(err.message || 'Failed to delete note', 'error');
+        } finally {
+            setDeletingNoteId((prev) => (prev === noteId ? null : prev));
         }
     };
 
@@ -602,12 +612,15 @@ export default function ReaderPage() {
     }, [selectionLookup.result, addVocabEntry, hideSelectionMenu, clearBrowserSelection]);
 
     const handleAddVocab = async () => {
+        setAddingVocab(true);
         try {
             await addVocabEntry(vocabWord, vocabDef);
             setVocabWord('');
             setVocabDef('');
         } catch {
             // Error toast is handled in addVocabEntry.
+        } finally {
+            setAddingVocab(false);
         }
     };
 
@@ -625,12 +638,15 @@ export default function ReaderPage() {
 
     const handleDeleteVocab = async (vocabId: string) => {
         if (!bookId) return;
+        setDeletingVocabId(vocabId);
         try {
             await api.deleteVocab(bookId, vocabId);
             setVocab((prev) => prev.filter((v) => v._id !== vocabId));
             showToast('Word deleted', 'success');
         } catch (err: any) {
             showToast(err.message || 'Failed to delete vocabulary', 'error');
+        } finally {
+            setDeletingVocabId((prev) => (prev === vocabId ? null : prev));
         }
     };
 
@@ -1186,7 +1202,7 @@ export default function ReaderPage() {
                             />
                             <button
                                 onClick={handleAddNote}
-                                disabled={!noteTitle.trim() || !noteContent.trim()}
+                                disabled={addingNote || !noteTitle.trim() || !noteContent.trim()}
                                 style={{
                                     width: '100%',
                                     padding: '8px',
@@ -1196,16 +1212,20 @@ export default function ReaderPage() {
                                     fontWeight: 500,
                                     fontSize: '0.8rem',
                                     border: 'none',
-                                    cursor: !noteTitle.trim() || !noteContent.trim() ? 'not-allowed' : 'pointer',
-                                    opacity: !noteTitle.trim() || !noteContent.trim() ? 0.5 : 1,
+                                    cursor: addingNote || !noteTitle.trim() || !noteContent.trim() ? 'not-allowed' : 'pointer',
+                                    opacity: addingNote || !noteTitle.trim() || !noteContent.trim() ? 0.5 : 1,
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: '6px',
                                 }}
                             >
-                                <Plus size={14} />
-                                Add Note
+                                {addingNote ? (
+                                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                                ) : (
+                                    <Plus size={14} />
+                                )}
+                                {addingNote ? 'Adding...' : 'Add Note'}
                             </button>
                         </div>
 
@@ -1284,11 +1304,23 @@ export default function ReaderPage() {
                                                     </button>
                                                     <button
                                                         onClick={() => handleDeleteNote(note._id)}
-                                                        style={{ ...smallIconBtn, color: 'var(--color-danger)' }}
-                                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--color-danger-soft)'}
+                                                        disabled={deletingNoteId === note._id}
+                                                        style={{
+                                                            ...smallIconBtn,
+                                                            color: 'var(--color-danger)',
+                                                            opacity: deletingNoteId === note._id ? 0.7 : 1,
+                                                            cursor: deletingNoteId === note._id ? 'wait' : 'pointer',
+                                                        }}
+                                                        onMouseEnter={e => {
+                                                            if (deletingNoteId !== note._id) e.currentTarget.style.background = 'var(--color-danger-soft)';
+                                                        }}
                                                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                                     >
-                                                        <Trash2 size={13} />
+                                                        {deletingNoteId === note._id ? (
+                                                            <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                                                        ) : (
+                                                            <Trash2 size={13} />
+                                                        )}
                                                     </button>
                                                 </div>
                                             </div>
@@ -1359,7 +1391,7 @@ export default function ReaderPage() {
                             />
                             <button
                                 onClick={handleAddVocab}
-                                disabled={!vocabWord.trim() || !vocabDef.trim()}
+                                disabled={addingVocab || !vocabWord.trim() || !vocabDef.trim()}
                                 style={{
                                     width: '100%',
                                     padding: '8px',
@@ -1369,16 +1401,20 @@ export default function ReaderPage() {
                                     fontWeight: 500,
                                     fontSize: '0.8rem',
                                     border: 'none',
-                                    cursor: !vocabWord.trim() || !vocabDef.trim() ? 'not-allowed' : 'pointer',
-                                    opacity: !vocabWord.trim() || !vocabDef.trim() ? 0.5 : 1,
+                                    cursor: addingVocab || !vocabWord.trim() || !vocabDef.trim() ? 'not-allowed' : 'pointer',
+                                    opacity: addingVocab || !vocabWord.trim() || !vocabDef.trim() ? 0.5 : 1,
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: '6px',
                                 }}
                             >
-                                <Plus size={14} />
-                                Add Word
+                                {addingVocab ? (
+                                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                                ) : (
+                                    <Plus size={14} />
+                                )}
+                                {addingVocab ? 'Adding...' : 'Add Word'}
                             </button>
                         </div>
 
@@ -1458,11 +1494,23 @@ export default function ReaderPage() {
                                                     </button>
                                                     <button
                                                         onClick={() => handleDeleteVocab(v._id!)}
-                                                        style={{ ...smallIconBtn, color: 'var(--color-danger)' }}
-                                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--color-danger-soft)'}
+                                                        disabled={deletingVocabId === v._id}
+                                                        style={{
+                                                            ...smallIconBtn,
+                                                            color: 'var(--color-danger)',
+                                                            opacity: deletingVocabId === v._id ? 0.7 : 1,
+                                                            cursor: deletingVocabId === v._id ? 'wait' : 'pointer',
+                                                        }}
+                                                        onMouseEnter={e => {
+                                                            if (deletingVocabId !== v._id) e.currentTarget.style.background = 'var(--color-danger-soft)';
+                                                        }}
                                                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                                     >
-                                                        <Trash2 size={13} />
+                                                        {deletingVocabId === v._id ? (
+                                                            <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                                                        ) : (
+                                                            <Trash2 size={13} />
+                                                        )}
                                                     </button>
                                                 </div>
                                             </div>
