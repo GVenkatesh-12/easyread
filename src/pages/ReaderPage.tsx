@@ -24,6 +24,7 @@ import {
     Sunset,
     Flame,
     Eye,
+    Copy,
     Columns2,
 } from 'lucide-react';
 
@@ -36,6 +37,13 @@ interface ThemeOption {
     label: string;
     icon: React.ReactNode;
     preview: string;
+}
+
+interface SelectionMenuState {
+    visible: boolean;
+    text: string;
+    x: number;
+    y: number;
 }
 
 const THEME_OPTIONS: ThemeOption[] = [
@@ -63,6 +71,13 @@ export default function ReaderPage() {
     const [pageInput, setPageInput] = useState('1');
     const [isNarrowViewport, setIsNarrowViewport] = useState(false);
     const [isMobileViewport, setIsMobileViewport] = useState(false);
+    const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
+    const [selectionMenu, setSelectionMenu] = useState<SelectionMenuState>({
+        visible: false,
+        text: '',
+        x: 0,
+        y: 0,
+    });
 
     const [showNotes, setShowNotes] = useState(false);
     const [showVocab, setShowVocab] = useState(false);
@@ -83,8 +98,14 @@ export default function ReaderPage() {
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const pageShellRef = useRef<HTMLDivElement>(null);
+    const textLayerRef = useRef<HTMLDivElement>(null);
+    const selectionMenuRef = useRef<HTMLDivElement>(null);
     const themePickerRef = useRef<HTMLDivElement>(null);
     const progressTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
+    const textLayerTaskRef = useRef<pdfjsLib.TextLayer | null>(null);
+    const renderCycleRef = useRef(0);
 
     useEffect(() => {
         if (!bookId) return;
@@ -135,9 +156,77 @@ export default function ReaderPage() {
         loadPdf();
     }, [book]);
 
+    const hideSelectionMenu = useCallback(() => {
+        setSelectionMenu((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    }, []);
+
+    const clearBrowserSelection = useCallback(() => {
+        window.getSelection()?.removeAllRanges();
+    }, []);
+
+    const isSelectionInsideTextLayer = useCallback((selection: Selection | null) => {
+        const textLayer = textLayerRef.current;
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !textLayer) {
+            return false;
+        }
+
+        const { anchorNode, focusNode } = selection;
+        return Boolean(anchorNode && focusNode && textLayer.contains(anchorNode) && textLayer.contains(focusNode));
+    }, []);
+
+    const getSelectedPdfText = useCallback((selection: Selection | null) => {
+        if (!isSelectionInsideTextLayer(selection)) {
+            return '';
+        }
+        return selection?.toString().replace(/\s+/g, ' ').trim() ?? '';
+    }, [isSelectionInsideTextLayer]);
+
+    const getSelectionMenuPosition = useCallback((range: Range, x?: number, y?: number) => {
+        const rect = range.getBoundingClientRect();
+        const menuWidth = 220;
+        const menuHeight = 48;
+        const padding = 12;
+
+        let nextX = x ?? rect.left + rect.width / 2;
+        let nextY = y ?? rect.top - 14;
+
+        if (nextY < menuHeight + padding) {
+            nextY = rect.bottom + 14;
+        }
+
+        nextX = Math.min(Math.max(nextX, padding + menuWidth / 2), window.innerWidth - padding - menuWidth / 2);
+        nextY = Math.min(Math.max(nextY, padding + menuHeight / 2), window.innerHeight - padding - menuHeight / 2);
+
+        return { x: nextX, y: nextY };
+    }, []);
+
+    const syncSelectionMenu = useCallback((position?: { x?: number; y?: number }) => {
+        const selection = window.getSelection();
+        const text = getSelectedPdfText(selection);
+        if (!text || !selection || selection.rangeCount === 0) {
+            hideSelectionMenu();
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const nextPosition = getSelectionMenuPosition(range, position?.x, position?.y);
+        setSelectionMenu({
+            visible: true,
+            text,
+            ...nextPosition,
+        });
+    }, [getSelectedPdfText, getSelectionMenuPosition, hideSelectionMenu]);
+
     const renderPage = useCallback(async () => {
-        if (!pdfDoc || !canvasRef.current || !containerRef.current) return;
+        if (!pdfDoc || !canvasRef.current || !containerRef.current || !pageShellRef.current || !textLayerRef.current) return;
+        const renderCycle = ++renderCycleRef.current;
         setRendering(true);
+        hideSelectionMenu();
+        clearBrowserSelection();
+        renderTaskRef.current?.cancel();
+        textLayerTaskRef.current?.cancel();
+        renderTaskRef.current = null;
+        textLayerTaskRef.current = null;
         try {
             const page = await pdfDoc.getPage(currentPage);
             const container = containerRef.current;
@@ -158,25 +247,66 @@ export default function ReaderPage() {
             }
             const scale = baseScale * zoomLevel;
             const scaledViewport = page.getViewport({ scale });
+            const roundedWidth = Math.floor(scaledViewport.width);
+            const roundedHeight = Math.floor(scaledViewport.height);
+            setPageSize({ width: roundedWidth, height: roundedHeight });
+
+            const pageShell = pageShellRef.current;
+            const textLayer = textLayerRef.current;
+            pageShell.style.setProperty('--total-scale-factor', `${scale}`);
+            pageShell.style.setProperty('--scale-round-x', '1px');
+            pageShell.style.setProperty('--scale-round-y', '1px');
+            textLayer.style.setProperty('--total-scale-factor', `${scale}`);
+            textLayer.style.setProperty('--scale-round-x', '1px');
+            textLayer.style.setProperty('--scale-round-y', '1px');
+            textLayer.replaceChildren();
+            textLayer.classList.remove('selecting');
+
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d')!;
             const outputScale = window.devicePixelRatio || 1;
             canvas.width = Math.floor(scaledViewport.width * outputScale);
             canvas.height = Math.floor(scaledViewport.height * outputScale);
-            canvas.style.width = `${Math.floor(scaledViewport.width)}px`;
-            canvas.style.height = `${Math.floor(scaledViewport.height)}px`;
-            await page.render({
+            canvas.style.width = `${roundedWidth}px`;
+            canvas.style.height = `${roundedHeight}px`;
+            const renderTask = page.render({
                 canvasContext: ctx,
                 canvas,
                 viewport: scaledViewport,
                 transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0],
-            }).promise;
+            });
+            renderTaskRef.current = renderTask;
+
+            const textLayerTask = new pdfjsLib.TextLayer({
+                textContentSource: page.streamTextContent({
+                    includeMarkedContent: true,
+                    disableNormalization: true,
+                }),
+                container: textLayer,
+                viewport: scaledViewport,
+            });
+            textLayerTaskRef.current = textLayerTask;
+
+            await Promise.all([renderTask.promise, textLayerTask.render()]);
+            if (renderCycle !== renderCycleRef.current) {
+                return;
+            }
+
+            const endOfContent = document.createElement('div');
+            endOfContent.className = 'endOfContent';
+            textLayer.append(endOfContent);
         } catch (err) {
-            console.error('Render error:', err);
+            if (!(err instanceof Error && (err.name === 'RenderingCancelledException' || err.name === 'AbortException'))) {
+                console.error('Render error:', err);
+            }
         } finally {
-            setRendering(false);
+            if (renderCycle === renderCycleRef.current) {
+                renderTaskRef.current = null;
+                textLayerTaskRef.current = null;
+                setRendering(false);
+            }
         }
-    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth, isMobileViewport]);
+    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth, isMobileViewport, hideSelectionMenu, clearBrowserSelection]);
 
     useEffect(() => { renderPage(); }, [renderPage]);
 
@@ -185,6 +315,11 @@ export default function ReaderPage() {
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, [renderPage]);
+
+    useEffect(() => () => {
+        renderTaskRef.current?.cancel();
+        textLayerTaskRef.current?.cancel();
+    }, []);
 
     useEffect(() => {
         const handleOutsideClick = (e: MouseEvent) => {
@@ -205,6 +340,39 @@ export default function ReaderPage() {
         }, 1000);
         return () => { if (progressTimeout.current) clearTimeout(progressTimeout.current); };
     }, [currentPage, bookId, totalPages]);
+
+    useEffect(() => {
+        const handleSelectionChange = () => {
+            const selection = window.getSelection();
+            if (!getSelectedPdfText(selection)) {
+                hideSelectionMenu();
+            }
+        };
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (selectionMenuRef.current?.contains(event.target as Node)) {
+                return;
+            }
+            if (!textLayerRef.current?.contains(event.target as Node)) {
+                hideSelectionMenu();
+            }
+        };
+
+        const handlePointerUp = () => {
+            textLayerRef.current?.classList.remove('selecting');
+        };
+
+        document.addEventListener('selectionchange', handleSelectionChange);
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('pointerup', handlePointerUp);
+        window.addEventListener('blur', hideSelectionMenu);
+        return () => {
+            document.removeEventListener('selectionchange', handleSelectionChange);
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('pointerup', handlePointerUp);
+            window.removeEventListener('blur', hideSelectionMenu);
+        };
+    }, [getSelectedPdfText, hideSelectionMenu]);
 
     const goToPage = (page: number) => {
         if (page >= 1 && page <= totalPages) setCurrentPage(page);
@@ -233,6 +401,66 @@ export default function ReaderPage() {
     const zoomIn = () => setZoomLevel(z => normalizeZoom(Math.min(z + ZOOM_STEP, ZOOM_MAX)));
     const zoomOut = () => setZoomLevel(z => normalizeZoom(Math.max(z - ZOOM_STEP, ZOOM_MIN)));
     const zoomPercent = Math.round(zoomLevel * 100);
+
+    const handleSelectionComplete = useCallback(() => {
+        window.requestAnimationFrame(() => {
+            textLayerRef.current?.classList.remove('selecting');
+            syncSelectionMenu();
+        });
+    }, [syncSelectionMenu]);
+
+    const handleSelectionStart = useCallback(() => {
+        textLayerRef.current?.classList.add('selecting');
+    }, []);
+
+    const handleSelectionContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+        const selection = window.getSelection();
+        if (!getSelectedPdfText(selection)) {
+            return;
+        }
+        event.preventDefault();
+        syncSelectionMenu({ x: event.clientX, y: event.clientY });
+    }, [getSelectedPdfText, syncSelectionMenu]);
+
+    const handleCopySelection = useCallback(async () => {
+        if (!selectionMenu.text) return;
+        try {
+            await navigator.clipboard.writeText(selectionMenu.text);
+            showToast('Selected text copied', 'success');
+        } catch {
+            showToast('Failed to copy selected text', 'error');
+        } finally {
+            hideSelectionMenu();
+        }
+    }, [selectionMenu.text, showToast, hideSelectionMenu]);
+
+    const handleSelectionToNote = useCallback(() => {
+        if (!selectionMenu.text) return;
+        setShowNotes(true);
+        setShowVocab(false);
+        setShowThemePicker(false);
+        setNoteTitle((prev) => prev.trim() || `Page ${currentPage}`);
+        setNoteContent((prev) => prev.trim() ? `${prev}\n\n${selectionMenu.text}` : selectionMenu.text);
+        showToast('Selection added to the note draft', 'success');
+        hideSelectionMenu();
+        clearBrowserSelection();
+    }, [selectionMenu.text, currentPage, showToast, hideSelectionMenu, clearBrowserSelection]);
+
+    const handleSelectionToVocab = useCallback(() => {
+        const normalizedWord = selectionMenu.text.trim();
+        if (!normalizedWord || /\s/.test(normalizedWord)) {
+            showToast('Select a single word to add it to vocabulary', 'error');
+            return;
+        }
+        setShowVocab(true);
+        setShowNotes(false);
+        setShowThemePicker(false);
+        setVocabWord(normalizedWord);
+        setVocabDef('');
+        showToast('Selection added to the vocabulary draft', 'success');
+        hideSelectionMenu();
+        clearBrowserSelection();
+    }, [selectionMenu.text, showToast, hideSelectionMenu, clearBrowserSelection]);
 
     const handleAddNote = async () => {
         if (!bookId || !noteTitle.trim() || !noteContent.trim()) return;
@@ -517,6 +745,7 @@ export default function ReaderPage() {
                 <div
                     ref={containerRef}
                     className={`pdf-theme-${pdfTheme}`}
+                    onScroll={hideSelectionMenu}
                     style={{
                         flex: 1,
                         minHeight: 0,
@@ -560,14 +789,32 @@ export default function ReaderPage() {
 
                     {!loading && pdfDoc && (
                         <>
-                            <canvas
-                                ref={canvasRef}
+                            <div
+                                ref={pageShellRef}
+                                className="pdf-page-shell"
+                                onMouseDown={handleSelectionStart}
+                                onMouseUp={handleSelectionComplete}
+                                onTouchStart={handleSelectionStart}
+                                onTouchEnd={handleSelectionComplete}
+                                onContextMenu={handleSelectionContextMenu}
                                 style={{
+                                    width: pageSize.width ? `${pageSize.width}px` : undefined,
+                                    height: pageSize.height ? `${pageSize.height}px` : undefined,
                                     maxWidth: isMobileViewport ? 'none' : '100%',
                                     borderRadius: 'var(--radius-sm)',
                                     boxShadow: 'var(--shadow-1)',
                                 }}
-                            />
+                            >
+                                <canvas
+                                    ref={canvasRef}
+                                    style={{
+                                        maxWidth: isMobileViewport ? 'none' : '100%',
+                                        borderRadius: 'var(--radius-sm)',
+                                        boxShadow: 'var(--shadow-1)',
+                                    }}
+                                />
+                                <div ref={textLayerRef} className="pdf-text-layer" />
+                            </div>
 
                             <div
                                 style={{
@@ -1137,6 +1384,87 @@ export default function ReaderPage() {
                     </div>
                 )}
             </div>
+            {selectionMenu.visible && (
+                <div
+                    ref={selectionMenuRef}
+                    style={{
+                        position: 'fixed',
+                        left: selectionMenu.x,
+                        top: selectionMenu.y,
+                        transform: 'translate(-50%, -50%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px',
+                        borderRadius: 'var(--radius-full)',
+                        background: 'var(--color-surface)',
+                        border: '1px solid var(--color-border)',
+                        boxShadow: 'var(--shadow-3)',
+                        zIndex: 120,
+                    }}
+                >
+                    <button
+                        onClick={handleCopySelection}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            height: '34px',
+                            padding: '0 12px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: 'var(--color-text)',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                        }}
+                    >
+                        <Copy size={14} />
+                        Copy
+                    </button>
+                    <button
+                        onClick={handleSelectionToNote}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            height: '34px',
+                            padding: '0 12px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: 'var(--color-text)',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                        }}
+                    >
+                        <StickyNote size={14} />
+                        Note
+                    </button>
+                    <button
+                        onClick={handleSelectionToVocab}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            height: '34px',
+                            padding: '0 12px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: 'var(--color-text)',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                        }}
+                    >
+                        <BookA size={14} />
+                        Vocabulary
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
