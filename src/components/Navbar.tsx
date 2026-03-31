@@ -26,11 +26,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
     const [showDictionaryModal, setShowDictionaryModal] = useState(false);
     const [lookupWord, setLookupWord] = useState('');
     const [lookupLoading, setLookupLoading] = useState(false);
-    const [lookupResult, setLookupResult] = useState<{
-        word: string;
-        definition: string;
-        partOfSpeech: string;
-    } | null>(null);
+    const [lookupResult, setLookupResult] = useState<api.DictionaryLookupResult | null>(null);
     const [lookupError, setLookupError] = useState('');
     const [addingLookupWord, setAddingLookupWord] = useState(false);
     const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 768 : false));
@@ -98,7 +94,7 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
         if (!lookupResult || !onAddVocabFromLookup) return;
         setAddingLookupWord(true);
         try {
-            await onAddVocabFromLookup(lookupResult.word, lookupResult.definition);
+            await onAddVocabFromLookup(lookupResult.word, lookupResult.vocabDefinition);
             closeDictionaryModal();
         } catch {
             // Reader page handles toast for add failures.
@@ -351,15 +347,38 @@ export default function Navbar({ title = 'EasyRead', showBack = false, children,
                             >
                                 <p style={{ fontWeight: 600, color: 'var(--color-accent)', marginBottom: '4px' }}>
                                     {lookupResult.word}
-                                    {lookupResult.partOfSpeech ? (
+                                    {lookupResult.primaryPartOfSpeech ? (
                                         <span style={{ fontWeight: 400, color: 'var(--color-text-secondary)', marginLeft: '8px', fontSize: '0.8rem' }}>
-                                            {lookupResult.partOfSpeech}
+                                            {lookupResult.primaryPartOfSpeech}
                                         </span>
                                     ) : null}
                                 </p>
-                                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5, marginBottom: '12px' }}>
-                                    {lookupResult.definition}
-                                </p>
+                                {lookupResult.phonetic && (
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: '8px' }}>
+                                        {lookupResult.phonetic}
+                                    </p>
+                                )}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px' }}>
+                                    {lookupResult.meanings.map((meaning, index) => (
+                                        <div key={`${meaning.partOfSpeech}-${index}`}>
+                                            {meaning.partOfSpeech && (
+                                                <p style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                                    {meaning.partOfSpeech}
+                                                </p>
+                                            )}
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                {meaning.definitions.map((definition, definitionIndex) => (
+                                                    <p
+                                                        key={`${meaning.partOfSpeech}-${definitionIndex}`}
+                                                        style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}
+                                                    >
+                                                        {definitionIndex + 1}. {definition}
+                                                    </p>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                                 {onAddVocabFromLookup && (
                                     <button
                                         onClick={handleAddLookupWord}

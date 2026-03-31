@@ -44,6 +44,19 @@ interface SelectionMenuState {
     text: string;
     x: number;
     y: number;
+    placement: 'top' | 'bottom';
+}
+
+interface SelectionLookupState {
+    visible: boolean;
+    word: string;
+    x: number;
+    y: number;
+    placement: 'top' | 'bottom';
+    loading: boolean;
+    adding: boolean;
+    result: api.DictionaryLookupResult | null;
+    error: string;
 }
 
 const THEME_OPTIONS: ThemeOption[] = [
@@ -77,6 +90,18 @@ export default function ReaderPage() {
         text: '',
         x: 0,
         y: 0,
+        placement: 'top',
+    });
+    const [selectionLookup, setSelectionLookup] = useState<SelectionLookupState>({
+        visible: false,
+        word: '',
+        x: 0,
+        y: 0,
+        placement: 'top',
+        loading: false,
+        adding: false,
+        result: null,
+        error: '',
     });
 
     const [showNotes, setShowNotes] = useState(false);
@@ -101,6 +126,7 @@ export default function ReaderPage() {
     const pageShellRef = useRef<HTMLDivElement>(null);
     const textLayerRef = useRef<HTMLDivElement>(null);
     const selectionMenuRef = useRef<HTMLDivElement>(null);
+    const selectionLookupRef = useRef<HTMLDivElement>(null);
     const themePickerRef = useRef<HTMLDivElement>(null);
     const progressTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
@@ -158,6 +184,7 @@ export default function ReaderPage() {
 
     const hideSelectionMenu = useCallback(() => {
         setSelectionMenu((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+        setSelectionLookup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
     }, []);
 
     const clearBrowserSelection = useCallback(() => {
@@ -181,26 +208,45 @@ export default function ReaderPage() {
         return selection?.toString().replace(/\s+/g, ' ').trim() ?? '';
     }, [isSelectionInsideTextLayer]);
 
-    const getSelectionMenuPosition = useCallback((range: Range, x?: number, y?: number) => {
-        const rect = range.getBoundingClientRect();
-        const menuWidth = 220;
-        const menuHeight = 48;
-        const padding = 12;
-
-        let nextX = x ?? rect.left + rect.width / 2;
-        let nextY = y ?? rect.top - 14;
-
-        if (nextY < menuHeight + padding) {
-            nextY = rect.bottom + 14;
+    const getSingleSelectedWord = useCallback((text: string) => {
+        const cleaned = text
+            .trim()
+            .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}'’-]+$/gu, '');
+        if (!cleaned || /\s/.test(cleaned)) {
+            return '';
         }
-
-        nextX = Math.min(Math.max(nextX, padding + menuWidth / 2), window.innerWidth - padding - menuWidth / 2);
-        nextY = Math.min(Math.max(nextY, padding + menuHeight / 2), window.innerHeight - padding - menuHeight / 2);
-
-        return { x: nextX, y: nextY };
+        return cleaned;
     }, []);
 
-    const syncSelectionMenu = useCallback((position?: { x?: number; y?: number }) => {
+    const getFloatingPosition = useCallback((range: Range, dimensions: { width: number; height: number }) => {
+        const rect = range.getBoundingClientRect();
+        const padding = 12;
+        const preferredTop = rect.top - 16;
+        const fitsAbove = preferredTop >= dimensions.height + padding;
+        const placement: 'top' | 'bottom' = fitsAbove ? 'top' : 'bottom';
+
+        let nextX = rect.left + rect.width / 2;
+        let nextY = placement === 'top' ? preferredTop : rect.bottom + 16;
+
+        nextX = Math.min(
+            Math.max(nextX, padding + dimensions.width / 2),
+            window.innerWidth - padding - dimensions.width / 2,
+        );
+
+        if (placement === 'top') {
+            nextY = Math.max(nextY, dimensions.height + padding);
+        } else {
+            nextY = Math.min(nextY, window.innerHeight - padding - dimensions.height);
+        }
+
+        return { x: nextX, y: nextY, placement };
+    }, []);
+
+    const getSelectionMenuPosition = useCallback((range: Range) => {
+        return getFloatingPosition(range, { width: 220, height: 48 });
+    }, [getFloatingPosition]);
+
+    const syncSelectionMenu = useCallback(() => {
         const selection = window.getSelection();
         const text = getSelectedPdfText(selection);
         if (!text || !selection || selection.rangeCount === 0) {
@@ -209,12 +255,13 @@ export default function ReaderPage() {
         }
 
         const range = selection.getRangeAt(0);
-        const nextPosition = getSelectionMenuPosition(range, position?.x, position?.y);
+        const nextPosition = getSelectionMenuPosition(range);
         setSelectionMenu({
             visible: true,
             text,
             ...nextPosition,
         });
+        setSelectionLookup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
     }, [getSelectedPdfText, getSelectionMenuPosition, hideSelectionMenu]);
 
     const renderPage = useCallback(async () => {
@@ -350,7 +397,10 @@ export default function ReaderPage() {
         };
 
         const handlePointerDown = (event: MouseEvent) => {
-            if (selectionMenuRef.current?.contains(event.target as Node)) {
+            if (
+                selectionMenuRef.current?.contains(event.target as Node) ||
+                selectionLookupRef.current?.contains(event.target as Node)
+            ) {
                 return;
             }
             if (!textLayerRef.current?.contains(event.target as Node)) {
@@ -419,7 +469,7 @@ export default function ReaderPage() {
             return;
         }
         event.preventDefault();
-        syncSelectionMenu({ x: event.clientX, y: event.clientY });
+        syncSelectionMenu();
     }, [getSelectedPdfText, syncSelectionMenu]);
 
     const handleCopySelection = useCallback(async () => {
@@ -446,21 +496,50 @@ export default function ReaderPage() {
         clearBrowserSelection();
     }, [selectionMenu.text, currentPage, showToast, hideSelectionMenu, clearBrowserSelection]);
 
-    const handleSelectionToVocab = useCallback(() => {
-        const normalizedWord = selectionMenu.text.trim();
-        if (!normalizedWord || /\s/.test(normalizedWord)) {
+    const handleSelectionToVocab = useCallback(async () => {
+        const normalizedWord = getSingleSelectedWord(selectionMenu.text);
+        if (!normalizedWord) {
             showToast('Select a single word to add it to vocabulary', 'error');
             return;
         }
-        setShowVocab(true);
-        setShowNotes(false);
-        setShowThemePicker(false);
-        setVocabWord(normalizedWord);
-        setVocabDef('');
-        showToast('Selection added to the vocabulary draft', 'success');
-        hideSelectionMenu();
-        clearBrowserSelection();
-    }, [selectionMenu.text, showToast, hideSelectionMenu, clearBrowserSelection]);
+
+        const selection = window.getSelection();
+        const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+        const lookupPosition = range
+            ? getFloatingPosition(range, { width: 360, height: 340 })
+            : { x: selectionMenu.x, y: selectionMenu.y, placement: 'bottom' as const };
+
+        setSelectionMenu((prev) => ({ ...prev, visible: false }));
+        setSelectionLookup({
+            visible: true,
+            word: normalizedWord,
+            x: lookupPosition.x,
+            y: lookupPosition.y,
+            placement: lookupPosition.placement,
+            loading: true,
+            adding: false,
+            result: null,
+            error: '',
+        });
+
+        try {
+            const result = await api.lookupWordDefinition(normalizedWord);
+            setSelectionLookup((prev) => ({
+                ...prev,
+                visible: true,
+                word: result.word,
+                loading: false,
+                result,
+            }));
+        } catch (err: any) {
+            setSelectionLookup((prev) => ({
+                ...prev,
+                visible: true,
+                loading: false,
+                error: err.message || 'Failed to fetch definition',
+            }));
+        }
+    }, [selectionMenu.x, selectionMenu.y, getSingleSelectedWord, getFloatingPosition, showToast, selectionMenu.text]);
 
     const handleAddNote = async () => {
         if (!bookId || !noteTitle.trim() || !noteContent.trim()) return;
@@ -509,6 +588,18 @@ export default function ReaderPage() {
             throw err;
         }
     };
+
+    const handleAddSelectionLookupToVocab = useCallback(async () => {
+        if (!selectionLookup.result) return;
+        setSelectionLookup((prev) => ({ ...prev, adding: true }));
+        try {
+            await addVocabEntry(selectionLookup.result.word, selectionLookup.result.vocabDefinition);
+            hideSelectionMenu();
+            clearBrowserSelection();
+        } finally {
+            setSelectionLookup((prev) => ({ ...prev, adding: false, visible: false }));
+        }
+    }, [selectionLookup.result, addVocabEntry, hideSelectionMenu, clearBrowserSelection]);
 
     const handleAddVocab = async () => {
         try {
@@ -616,6 +707,8 @@ export default function ReaderPage() {
         goToPage(parsed);
         setPageInput(String(Math.max(1, Math.min(parsed, totalPages || 1))));
     };
+
+    const isSingleWordSelection = Boolean(getSingleSelectedWord(selectionMenu.text));
 
     return (
         <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1391,7 +1484,7 @@ export default function ReaderPage() {
                         position: 'fixed',
                         left: selectionMenu.x,
                         top: selectionMenu.y,
-                        transform: 'translate(-50%, -50%)',
+                        transform: selectionMenu.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
@@ -1423,46 +1516,150 @@ export default function ReaderPage() {
                         <Copy size={14} />
                         Copy
                     </button>
-                    <button
-                        onClick={handleSelectionToNote}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            borderRadius: 'var(--radius-full)',
-                            height: '34px',
-                            padding: '0 12px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            color: 'var(--color-text)',
-                            fontSize: '0.78rem',
-                            fontWeight: 500,
-                        }}
-                    >
-                        <StickyNote size={14} />
-                        Note
-                    </button>
-                    <button
-                        onClick={handleSelectionToVocab}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            borderRadius: 'var(--radius-full)',
-                            height: '34px',
-                            padding: '0 12px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            color: 'var(--color-text)',
-                            fontSize: '0.78rem',
-                            fontWeight: 500,
-                        }}
-                    >
-                        <BookA size={14} />
-                        Vocabulary
-                    </button>
+                    {isSingleWordSelection ? (
+                        <button
+                            onClick={handleSelectionToVocab}
+                            style={{
+                                background: 'transparent',
+                                border: 'none',
+                                borderRadius: 'var(--radius-full)',
+                                height: '34px',
+                                padding: '0 12px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                color: 'var(--color-text)',
+                                fontSize: '0.78rem',
+                                fontWeight: 500,
+                            }}
+                        >
+                            <BookA size={14} />
+                            Vocabulary
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleSelectionToNote}
+                            style={{
+                                background: 'transparent',
+                                border: 'none',
+                                borderRadius: 'var(--radius-full)',
+                                height: '34px',
+                                padding: '0 12px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                color: 'var(--color-text)',
+                                fontSize: '0.78rem',
+                                fontWeight: 500,
+                            }}
+                        >
+                            <StickyNote size={14} />
+                            Note
+                        </button>
+                    )}
+                </div>
+            )}
+            {selectionLookup.visible && (
+                <div
+                    ref={selectionLookupRef}
+                    className="animate-fade-in"
+                    style={{
+                        position: 'fixed',
+                        left: selectionLookup.x,
+                        top: selectionLookup.y,
+                        transform: selectionLookup.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+                        width: 'min(360px, calc(100vw - 24px))',
+                        padding: '14px',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-surface)',
+                        border: '1px solid var(--color-border)',
+                        boxShadow: 'var(--shadow-3)',
+                        zIndex: 121,
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '10px' }}>
+                        <div>
+                            <p style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--color-accent)' }}>
+                                {selectionLookup.result?.word || selectionLookup.word}
+                            </p>
+                            {selectionLookup.result?.phonetic && (
+                                <p style={{ marginTop: '2px', fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
+                                    {selectionLookup.result.phonetic}
+                                </p>
+                            )}
+                        </div>
+                        <button
+                            onClick={hideSelectionMenu}
+                            style={{ ...smallIconBtn, color: 'var(--color-text-secondary)' }}
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+
+                    {selectionLookup.loading ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-secondary)', fontSize: '0.82rem' }}>
+                            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                            Looking up definition...
+                        </div>
+                    ) : selectionLookup.error ? (
+                        <p style={{ color: 'var(--color-danger)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                            {selectionLookup.error}
+                        </p>
+                    ) : selectionLookup.result ? (
+                        <>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto', paddingRight: '4px' }}>
+                                {selectionLookup.result.meanings.map((meaning, index) => (
+                                    <div key={`${meaning.partOfSpeech}-${index}`}>
+                                        {meaning.partOfSpeech && (
+                                            <p style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                                {meaning.partOfSpeech}
+                                            </p>
+                                        )}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            {meaning.definitions.map((definition, definitionIndex) => (
+                                                <p
+                                                    key={`${meaning.partOfSpeech}-${definitionIndex}`}
+                                                    style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)', lineHeight: 1.45 }}
+                                                >
+                                                    {definitionIndex + 1}. {definition}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <button
+                                onClick={handleAddSelectionLookupToVocab}
+                                disabled={selectionLookup.adding}
+                                style={{
+                                    width: '100%',
+                                    marginTop: '12px',
+                                    padding: '9px 12px',
+                                    borderRadius: 'var(--radius-full)',
+                                    background: 'var(--color-accent)',
+                                    color: '#fff',
+                                    fontWeight: 500,
+                                    fontSize: '0.82rem',
+                                    border: 'none',
+                                    cursor: selectionLookup.adding ? 'not-allowed' : 'pointer',
+                                    opacity: selectionLookup.adding ? 0.65 : 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '6px',
+                                }}
+                            >
+                                {selectionLookup.adding ? (
+                                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                                ) : (
+                                    <Plus size={14} />
+                                )}
+                                Add to Vocab
+                            </button>
+                        </>
+                    ) : null}
                 </div>
             )}
         </div>

@@ -141,12 +141,31 @@ export async function deleteVocab(bookId: string, vocabId: string) {
 
 /* ── Dictionary ──────────────────────────────────────────────── */
 interface DictionaryEntry {
+    word?: string;
+    phonetic?: string;
+    phonetics?: Array<{
+        text?: string;
+    }>;
     meanings?: Array<{
         partOfSpeech?: string;
         definitions?: Array<{
             definition?: string;
         }>;
     }>;
+}
+
+export interface DictionaryMeaning {
+    partOfSpeech: string;
+    definitions: string[];
+}
+
+export interface DictionaryLookupResult {
+    word: string;
+    phonetic: string;
+    primaryDefinition: string;
+    primaryPartOfSpeech: string;
+    meanings: DictionaryMeaning[];
+    vocabDefinition: string;
 }
 
 export async function lookupWordDefinition(word: string) {
@@ -162,17 +181,37 @@ export async function lookupWordDefinition(word: string) {
 
     const data = (await response.json()) as DictionaryEntry[];
     const firstEntry = data[0];
-    const firstMeaning = firstEntry?.meanings?.find((meaning) => meaning.definitions?.length);
-    const firstDefinition = firstMeaning?.definitions?.[0]?.definition;
+    const meanings = (firstEntry?.meanings || [])
+        .map((meaning) => ({
+            partOfSpeech: meaning.partOfSpeech || '',
+            definitions: (meaning.definitions || [])
+                .map((definition) => definition.definition?.trim() || '')
+                .filter(Boolean),
+        }))
+        .filter((meaning) => meaning.definitions.length > 0);
+
+    const firstMeaning = meanings[0];
+    const firstDefinition = firstMeaning?.definitions[0];
 
     if (!firstDefinition) {
         throw new Error('Definition not found');
     }
 
+    const vocabDefinition = meanings
+        .slice(0, 3)
+        .map((meaning) => {
+            const summary = meaning.definitions.slice(0, 2).join('; ');
+            return meaning.partOfSpeech ? `${meaning.partOfSpeech}: ${summary}` : summary;
+        })
+        .join(' | ');
+
     return {
-        word: trimmed,
-        definition: firstDefinition,
-        partOfSpeech: firstMeaning?.partOfSpeech || '',
+        word: firstEntry?.word?.trim().toLowerCase() || trimmed,
+        phonetic: firstEntry?.phonetic || firstEntry?.phonetics?.find((item) => item.text)?.text || '',
+        primaryDefinition: firstDefinition,
+        primaryPartOfSpeech: firstMeaning?.partOfSpeech || '',
+        meanings,
+        vocabDefinition,
     };
 }
 
