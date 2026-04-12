@@ -25,6 +25,14 @@ async function request<T>(
         headers,
     });
 
+    if (res.status === 401 && token) {
+        localStorage.removeItem('easyread_token');
+        localStorage.removeItem('easyread_userId');
+        sessionStorage.setItem('easyread_session_expired', '1');
+        window.dispatchEvent(new Event('session-expired'));
+        return new Promise<T>(() => {});
+    }
+
     if (!res.ok) {
         const err = await res.json().catch(() => ({ message: res.statusText }));
         throw new Error(err.message || `Request failed (${res.status})`);

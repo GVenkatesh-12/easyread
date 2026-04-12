@@ -52,15 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await loginAction(email, password);
     }, [loginAction]);
 
-    // Check token validity on mount
     useEffect(() => {
-        if (state.token) {
-            // Attempt to fetch books to validate token
-            api.getBooks().catch(() => {
-                logout();
-            });
-        }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+        const handleSessionExpired = () => logout();
+        window.addEventListener('session-expired', handleSessionExpired);
+        return () => window.removeEventListener('session-expired', handleSessionExpired);
+    }, [logout]);
 
     return (
         <AuthContext.Provider

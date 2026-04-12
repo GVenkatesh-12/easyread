@@ -136,6 +136,7 @@ export default function ReaderPage() {
     const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null);
     const textLayerTaskRef = useRef<pdfjsLib.TextLayer | null>(null);
     const renderCycleRef = useRef(0);
+    const pageCacheRef = useRef<Map<number, pdfjsLib.PDFPageProxy>>(new Map());
 
     useEffect(() => {
         if (!bookId) return;
@@ -172,9 +173,15 @@ export default function ReaderPage() {
     useEffect(() => {
         if (!book) return;
         setLoading(true);
+        pageCacheRef.current.clear();
         const loadPdf = async () => {
             try {
-                const doc = await pdfjsLib.getDocument(book.pdfUrl).promise;
+                const doc = await pdfjsLib.getDocument({
+                    url: book.pdfUrl,
+                    disableAutoFetch: true,
+                    disableStream: false,
+                    rangeChunkSize: 65536,
+                }).promise;
                 setPdfDoc(doc);
                 setTotalPages(doc.numPages);
             } catch (err: any) {
@@ -268,6 +275,19 @@ export default function ReaderPage() {
         setSelectionLookup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
     }, [getSelectedPdfText, getSelectionMenuPosition, hideSelectionMenu]);
 
+    const getPage = useCallback(async (pdfDoc: pdfjsLib.PDFDocumentProxy, pageNum: number) => {
+        const cache = pageCacheRef.current;
+        const cached = cache.get(pageNum);
+        if (cached) return cached;
+        const page = await pdfDoc.getPage(pageNum);
+        cache.set(pageNum, page);
+        if (cache.size > 10) {
+            const oldest = cache.keys().next().value;
+            if (oldest !== undefined) cache.delete(oldest);
+        }
+        return page;
+    }, []);
+
     const renderPage = useCallback(async () => {
         if (!pdfDoc || !canvasRef.current || !containerRef.current || !pageShellRef.current || !textLayerRef.current) return;
         const renderCycle = ++renderCycleRef.current;
@@ -279,7 +299,7 @@ export default function ReaderPage() {
         renderTaskRef.current = null;
         textLayerTaskRef.current = null;
         try {
-            const page = await pdfDoc.getPage(currentPage);
+            const page = await getPage(pdfDoc, currentPage);
             const container = containerRef.current;
             const horizontalInset = isMobileViewport ? 16 : 40;
             const containerWidth = Math.max(container.clientWidth - horizontalInset, 180);
@@ -357,9 +377,23 @@ export default function ReaderPage() {
                 setRendering(false);
             }
         }
-    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth, isMobileViewport, hideSelectionMenu, clearBrowserSelection]);
+    }, [pdfDoc, currentPage, zoomLevel, maxPageWidth, isMobileViewport, hideSelectionMenu, clearBrowserSelection, getPage]);
 
     useEffect(() => { renderPage(); }, [renderPage]);
+
+    useEffect(() => {
+        if (!pdfDoc || !totalPages) return;
+        const pagesToPrefetch = [currentPage + 1, currentPage + 2, currentPage - 1].filter(
+            (p) => p >= 1 && p <= totalPages && !pageCacheRef.current.has(p),
+        );
+        let cancelled = false;
+        pagesToPrefetch.forEach((p) => {
+            pdfDoc.getPage(p).then((page) => {
+                if (!cancelled) pageCacheRef.current.set(p, page);
+            }).catch(() => {});
+        });
+        return () => { cancelled = true; };
+    }, [pdfDoc, currentPage, totalPages]);
 
     useEffect(() => {
         const handleResize = () => renderPage();

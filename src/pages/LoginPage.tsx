@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../components/Toast';
@@ -13,6 +13,14 @@ export default function LoginPage() {
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const expired = sessionStorage.getItem('easyread_session_expired');
+        if (expired) {
+            sessionStorage.removeItem('easyread_session_expired');
+            showToast('Your session has expired. Please sign in again.', 'info');
+        }
+    }, [showToast]);
 
     if (isAuthenticated) return <Navigate to="/" replace />;
 
