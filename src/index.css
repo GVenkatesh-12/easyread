@@ -125,6 +125,11 @@ body {
   to { transform: rotate(360deg); }
 }
 
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
 /* ── PDF Reading Themes (applied to canvas container) ────────── */
 .pdf-page-shell {
   position: relative;

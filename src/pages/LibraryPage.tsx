@@ -14,6 +14,7 @@ import {
     FileText,
     Loader2,
 } from 'lucide-react';
+import PdfCoverImage from '../components/PdfCoverImage';
 
 export default function LibraryPage() {
     const navigate = useNavigate();
@@ -234,22 +235,16 @@ export default function LibraryPage() {
                             >
                                 <div
                                     onClick={() => navigate(`/read/${book._id}`)}
-                                    style={{
-                                        height: '140px',
-                                        background: `hsl(${(book.title.charCodeAt(0) * 37) % 360}, 40%, 55%)`,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        position: 'relative',
-                                    }}
+                                    style={{ position: 'relative' }}
                                 >
-                                    <FileText size={40} color="rgba(255,255,255,0.7)" />
+                                    <PdfCoverImage pdfUrl={book.pdfUrl} height={160} />
                                     <div
                                         style={{
                                             position: 'absolute',
                                             top: '10px',
                                             right: '10px',
-                                            background: 'rgba(0,0,0,0.45)',
+                                            background: 'rgba(0,0,0,0.55)',
+                                            backdropFilter: 'blur(4px)',
                                             borderRadius: 'var(--radius-full)',
                                             padding: '3px 10px',
                                             fontSize: '0.75rem',
