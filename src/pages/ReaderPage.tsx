@@ -77,10 +77,19 @@ export default function ReaderPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const [rendering, setRendering] = useState(false);
-    const [pdfTheme, setPdfTheme] = useState<PdfTheme>('default');
+    const [pdfTheme, setPdfTheme] = useState<PdfTheme>(() => {
+        const saved = localStorage.getItem('reader_theme');
+        return (saved && ['default', 'dark', 'sepia', 'warm', 'blue-night'].includes(saved) ? saved : 'default') as PdfTheme;
+    });
     const [showThemePicker, setShowThemePicker] = useState(false);
-    const [zoomLevel, setZoomLevel] = useState(1.0);
-    const [maxPageWidth, setMaxPageWidth] = useState(0);
+    const [zoomLevel, setZoomLevel] = useState(() => {
+        const saved = parseFloat(localStorage.getItem('reader_zoom') || '');
+        return Number.isFinite(saved) && saved >= 0.5 && saved <= 2.5 ? saved : 1.0;
+    });
+    const [maxPageWidth, setMaxPageWidth] = useState(() => {
+        const saved = parseInt(localStorage.getItem('reader_page_width') || '', 10);
+        return [0, 900, 700, 550].includes(saved) ? saved : 0;
+    });
     const [pageInput, setPageInput] = useState('1');
     const [isNarrowViewport, setIsNarrowViewport] = useState(false);
     const [isMobileViewport, setIsMobileViewport] = useState(false);
@@ -169,6 +178,10 @@ export default function ReaderPage() {
     useEffect(() => {
         setPageInput(String(currentPage));
     }, [currentPage]);
+
+    useEffect(() => { localStorage.setItem('reader_theme', pdfTheme); }, [pdfTheme]);
+    useEffect(() => { localStorage.setItem('reader_zoom', String(zoomLevel)); }, [zoomLevel]);
+    useEffect(() => { localStorage.setItem('reader_page_width', String(maxPageWidth)); }, [maxPageWidth]);
 
     useEffect(() => {
         if (!book) return;
