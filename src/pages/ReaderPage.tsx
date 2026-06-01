@@ -463,7 +463,10 @@ export default function ReaderPage() {
     }, [getSelectedPdfText, hideSelectionMenu]);
 
     const goToPage = (page: number) => {
-        if (page >= 1 && page <= totalPages) setCurrentPage(page);
+        if (page >= 1 && page <= totalPages) {
+            setCurrentPage(page);
+            containerRef.current?.scrollTo({ top: 0 });
+        }
     };
 
     const WIDTH_PRESETS = [
