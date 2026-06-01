@@ -1,27 +1,27 @@
 @import "tailwindcss";
 
-/* ── Design Tokens (Google-inspired) ─────────────────────────── */
+/* ── Design Tokens (Warm Amber / Reading Theme) ─────────────── */
 :root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 
-  --color-bg: #f8f9fa;
+  --color-bg: #faf6f1;
   --color-surface: #ffffff;
-  --color-surface-hover: #f1f3f4;
-  --color-text: #202124;
-  --color-text-secondary: #5f6368;
-  --color-border: #dadce0;
-  --color-accent: #1a73e8;
-  --color-accent-hover: #1765cc;
-  --color-accent-soft: rgba(26, 115, 232, 0.08);
-  --color-danger: #d93025;
-  --color-danger-hover: #c5221f;
-  --color-danger-soft: rgba(217, 48, 37, 0.08);
-  --color-success: #1e8e3e;
-  --color-warning: #f9ab00;
+  --color-surface-hover: #f3ede4;
+  --color-text: #2c2419;
+  --color-text-secondary: #7a6e5d;
+  --color-border: #e0d6c8;
+  --color-accent: #c77d3a;
+  --color-accent-hover: #b06a2b;
+  --color-accent-soft: rgba(199, 125, 58, 0.1);
+  --color-danger: #c44234;
+  --color-danger-hover: #a8321f;
+  --color-danger-soft: rgba(196, 66, 52, 0.08);
+  --color-success: #3a7d44;
+  --color-warning: #d4a017;
 
-  --shadow-1: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
-  --shadow-2: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
-  --shadow-3: 0 4px 8px 3px rgba(60, 64, 67, 0.15), 0 1px 3px rgba(60, 64, 67, 0.3);
+  --shadow-1: 0 1px 2px 0 rgba(44, 36, 25, 0.15), 0 1px 3px 1px rgba(44, 36, 25, 0.08);
+  --shadow-2: 0 1px 2px 0 rgba(44, 36, 25, 0.15), 0 2px 6px 2px rgba(44, 36, 25, 0.1);
+  --shadow-3: 0 4px 8px 3px rgba(44, 36, 25, 0.1), 0 1px 3px rgba(44, 36, 25, 0.2);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -31,24 +31,24 @@
 }
 
 .dark {
-  --color-bg: #202124;
-  --color-surface: #292a2d;
-  --color-surface-hover: #35363a;
-  --color-text: #e8eaed;
-  --color-text-secondary: #9aa0a6;
-  --color-border: #3c4043;
-  --color-accent: #8ab4f8;
-  --color-accent-hover: #aecbfa;
-  --color-accent-soft: rgba(138, 180, 248, 0.12);
-  --color-danger: #f28b82;
-  --color-danger-hover: #ee675c;
-  --color-danger-soft: rgba(242, 139, 130, 0.12);
-  --color-success: #81c995;
-  --color-warning: #fdd663;
+  --color-bg: #1c1814;
+  --color-surface: #262019;
+  --color-surface-hover: #332b21;
+  --color-text: #e8dfd3;
+  --color-text-secondary: #a89a87;
+  --color-border: #3e3529;
+  --color-accent: #d4944a;
+  --color-accent-hover: #e6ac68;
+  --color-accent-soft: rgba(212, 148, 74, 0.14);
+  --color-danger: #e87a6f;
+  --color-danger-hover: #d45e52;
+  --color-danger-soft: rgba(232, 122, 111, 0.12);
+  --color-success: #7ec486;
+  --color-warning: #e8c44a;
 
-  --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.6), 0 1px 3px 1px rgba(0, 0, 0, 0.3);
-  --shadow-2: 0 1px 2px 0 rgba(0, 0, 0, 0.6), 0 2px 6px 2px rgba(0, 0, 0, 0.3);
-  --shadow-3: 0 4px 8px 3px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.6);
+  --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.5), 0 1px 3px 1px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 1px 2px 0 rgba(0, 0, 0, 0.5), 0 2px 6px 2px rgba(0, 0, 0, 0.25);
+  --shadow-3: 0 4px 8px 3px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 /* ── Global Reset & Base ─────────────────────────────────────── */
@@ -128,6 +128,40 @@ body {
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
+}
+
+/* ── Rainbow rotating border (Google AI Mode style) ──────────── */
+.rainbow-border-wrap {
+  position: relative;
+  border-radius: var(--radius-full);
+  flex: 1;
+  padding: 1px;
+  background: var(--color-accent);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.rainbow-border-wrap:hover {
+  background: conic-gradient(
+    from var(--rainbow-angle, 0deg),
+    #8b4513, #e8a040, #ffe066, #ffffff, #ffe066, #e8845a, #8b4513
+  );
+  animation: rainbow-rotate 2s linear infinite;
+  box-shadow: 0 0 12px rgba(232, 160, 64, 0.5);
+}
+
+@keyframes rainbow-rotate {
+  to { --rainbow-angle: 360deg; }
+}
+
+@property --rainbow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.rainbow-border-wrap > button {
+  position: relative;
+  z-index: 1;
 }
 
 /* ── PDF Reading Themes (applied to canvas container) ────────── */

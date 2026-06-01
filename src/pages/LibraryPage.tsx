@@ -311,10 +311,11 @@ export default function LibraryPage() {
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                                        <div className="rainbow-border-wrap">
                                         <button
                                             onClick={() => navigate(`/read/${book._id}`)}
                                             style={{
-                                                flex: 1,
+                                                width: '100%',
                                                 padding: '8px 12px',
                                                 borderRadius: 'var(--radius-full)',
                                                 background: 'var(--color-accent)',
@@ -332,6 +333,7 @@ export default function LibraryPage() {
                                             <BookOpen size={14} />
                                             Read
                                         </button>
+                                        </div>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setDeleteConfirm(book._id); }}
                                             style={{

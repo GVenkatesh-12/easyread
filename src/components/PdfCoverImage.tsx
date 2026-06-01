@@ -49,7 +49,7 @@ export default function PdfCoverImage({ pdfUrl, height = 140 }: PdfCoverImagePro
                 canvas.height = Math.floor(scaledViewport.height);
 
                 const ctx = canvas.getContext('2d')!;
-                await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
+                await page.render({ canvasContext: ctx, canvas, viewport: scaledViewport }).promise;
 
                 if (cancelled) { doc.destroy(); return; }
 
