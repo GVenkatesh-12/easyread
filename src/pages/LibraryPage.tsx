@@ -477,7 +477,7 @@ export default function LibraryPage() {
                                     <>
                                         <Upload size={28} style={{ color: 'var(--color-text-secondary)', marginBottom: '8px' }} />
                                         <p style={{ fontWeight: 500, color: 'var(--color-text)' }}>Click to select a PDF</p>
-                                        <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginTop: '4px' }}>Max 15 MB</p>
+                                        <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginTop: '4px' }}>Max 50 MB</p>
                                     </>
                                 )}
                             </div>
