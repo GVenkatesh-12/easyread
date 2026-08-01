@@ -4,7 +4,8 @@ const API_BASE = import.meta.env.PROD
 
 async function request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    extra: { skipAuthExpiry?: boolean } = {}
 ): Promise<T> {
     const token = localStorage.getItem('easyread_token');
     const headers: Record<string, string> = {
@@ -25,7 +26,7 @@ async function request<T>(
         headers,
     });
 
-    if (res.status === 401 && token) {
+    if (res.status === 401 && token && !extra.skipAuthExpiry) {
         localStorage.removeItem('easyread_token');
         localStorage.removeItem('easyread_userId');
         sessionStorage.setItem('easyread_session_expired', '1');
@@ -269,5 +270,5 @@ export async function synthesizeSpeech(text: string, signal?: AbortSignal) {
         method: 'POST',
         body: JSON.stringify({ text }),
         signal,
-    });
+    }, { skipAuthExpiry: true });
 }
