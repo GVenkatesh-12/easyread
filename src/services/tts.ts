@@ -4,6 +4,7 @@ export type TtsStatus = 'idle' | 'loading' | 'playing' | 'paused';
 
 export interface CharSpan {
     span: HTMLElement;
+    node: Text;
     start: number;
     end: number;
 }
@@ -34,6 +35,7 @@ interface LoadedChunk {
 
 const DEFAULT_CHUNK_SIZE = 4000;
 const ALIGNMENT_RESYNC_WINDOW = 24;
+const WORD_SPLIT_THRESHOLD = 12;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -81,28 +83,106 @@ function isSkippedElement(el: Element, root: Element): boolean {
     if (el === root) return false;
     if (el.hasAttribute('role') && el.getAttribute('role') === 'img') return true;
     if (el.classList.contains('endOfContent')) return true;
-    if (el.tagName === 'BR') return true;
     return false;
 }
 
-export function buildCharSpanMap(textLayer: HTMLElement): CharSpanMap {
-    const spans: CharSpan[] = [];
-    const pieces: string[] = [];
-    const walker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
-    let offset = 0;
+function splitTextNodeIntoWords(node: Text) {
+    const value = node.nodeValue ?? '';
+    const tokens = value.match(/[^\s]+|\s+/g) ?? [];
+    const fragment = document.createDocumentFragment();
+    for (const token of tokens) {
+        if (/^\s+$/.test(token)) {
+            fragment.appendChild(document.createTextNode(token));
+        } else {
+            const word = document.createElement('span');
+            word.className = 'tts-word';
+            word.textContent = token;
+            fragment.appendChild(word);
+        }
+    }
+    node.replaceWith(fragment);
+}
 
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-        const parent = node.parentElement;
+export function buildCharSpanMap(textLayer: HTMLElement): CharSpanMap {
+    const splitWalker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
+    let splitNode: Node | null;
+    while ((splitNode = splitWalker.nextNode())) {
+        const parent = splitNode.parentElement;
         if (!parent || isSkippedElement(parent, textLayer)) continue;
-        const value = node.nodeValue ?? '';
-        if (value.length === 0) continue;
-        spans.push({ span: parent, start: offset, end: offset + value.length });
-        pieces.push(value);
-        offset += value.length;
+        const value = splitNode.nodeValue ?? '';
+        if (value.length > WORD_SPLIT_THRESHOLD) {
+            splitTextNodeIntoWords(splitNode as Text);
+        }
     }
 
+    const spans: CharSpan[] = [];
+    const pieces: string[] = [];
+    let offset = 0;
+
+    const handleTextNode = (node: Text) => {
+        const value = node.nodeValue ?? '';
+        if (value.length === 0) return;
+        if (value.trim().length === 0) {
+            pieces.push(value);
+            offset += value.length;
+            return;
+        }
+        const span = node.parentElement;
+        if (!span) return;
+        spans.push({ span, node, start: offset, end: offset + value.length });
+        pieces.push(value);
+        offset += value.length;
+    };
+
+    const walk = (element: Element) => {
+        for (const child of Array.from(element.childNodes)) {
+            if (child.nodeType === Node.TEXT_NODE) {
+                handleTextNode(child as Text);
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                const childEl = child as Element;
+                if (childEl.tagName === 'BR') {
+                    pieces.push('\n');
+                    offset += 1;
+                } else if (!isSkippedElement(childEl, textLayer)) {
+                    walk(childEl);
+                }
+            }
+        }
+    };
+
+    walk(textLayer);
     return { root: textLayer, spans, text: pieces.join('') };
+}
+
+export function rangeToTextWithOffsets(range: Range, map: CharSpanMap): { text: string; start: number; end: number } | null {
+    const resolveBoundary = (container: Node, isStart: boolean): number | null => {
+        if (container.nodeType === Node.TEXT_NODE) {
+            const text = container as Text;
+            const offset = isStart ? range.startOffset : range.endOffset;
+            for (const entry of map.spans) {
+                if (entry.node === text) return entry.start + offset;
+            }
+            return null;
+        }
+        if (container.nodeType === Node.ELEMENT_NODE) {
+            if (container === map.root) {
+                return isStart ? 0 : map.text.length;
+            }
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+            let node: Node | null = null;
+            while ((node = walker.nextNode())) {
+                for (const entry of map.spans) {
+                    if (entry.node === node) return isStart ? entry.start : entry.end;
+                }
+            }
+        }
+        return null;
+    };
+
+    const start = resolveBoundary(range.startContainer, true);
+    const end = resolveBoundary(range.endContainer, false);
+    if (start === null || end === null || end <= start) return null;
+    return { text: map.text.slice(start, end), start, end };
 }
 
 function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
@@ -181,6 +261,8 @@ export class TtsController {
     private status: TtsStatus = 'idle';
     private label = '';
     private currentChunk: LoadedChunk | null = null;
+    private baseOffset = 0;
+    private highlightEnabled = true;
 
     constructor(callbacks?: TtsControllerCallbacks) {
         this.callbacks = callbacks ?? {};
@@ -199,9 +281,11 @@ export class TtsController {
         if (!map) this.clearHighlight();
     }
 
-    play(text: string, label: string) {
+    play(text: string, label: string, options?: { baseOffset?: number; highlight?: boolean }) {
         this.stopInternal();
         this.label = label;
+        this.baseOffset = options?.baseOffset ?? 0;
+        this.highlightEnabled = options?.highlight ?? true;
         const chunks = chunkText(text);
         if (chunks.length === 0) {
             this.emitError('No readable text found to speak.');
@@ -371,6 +455,7 @@ export class TtsController {
     }
 
     private updateHighlight() {
+        if (!this.highlightEnabled) return;
         const audio = this.audio;
         const chunk = this.currentChunk;
         if (!audio || !chunk || !this.charSpanMap) return;
@@ -399,8 +484,8 @@ export class TtsController {
             textIndex = Math.min(chunk.text.length - 1, Math.floor(fraction * chunk.text.length));
         }
 
-        const wordStart = chunk.offset + expandWordStart(chunk.text, textIndex);
-        const wordEnd = chunk.offset + expandWordEnd(chunk.text, textIndex);
+        const wordStart = this.baseOffset + chunk.offset + expandWordStart(chunk.text, textIndex);
+        const wordEnd = this.baseOffset + chunk.offset + expandWordEnd(chunk.text, textIndex);
         this.applyHighlight(wordStart, wordEnd);
     }
 

@@ -6,7 +6,7 @@ import Navbar from '../components/Navbar';
 import { useToast } from '../components/Toast';
 import * as api from '../services/api';
 import type { Book, Note, VocabEntry } from '../services/api';
-import { TtsController, buildCharSpanMap, type CharSpanMap, type TtsStatus } from '../services/tts';
+import { TtsController, buildCharSpanMap, rangeToTextWithOffsets, type CharSpanMap, type TtsStatus } from '../services/tts';
 import {
     ChevronLeft,
     ChevronRight,
@@ -736,24 +736,29 @@ export default function ReaderPage() {
         }
     };
 
-    const getSelectionRangeText = useCallback(() => {
-        const selection = window.getSelection();
-        if (!isSelectionInsideTextLayer(selection) || !selection || selection.rangeCount === 0) {
-            return '';
-        }
-        return selection.getRangeAt(0).cloneContents().textContent ?? '';
-    }, [isSelectionInsideTextLayer]);
-
     const handleListenSelection = useCallback(() => {
-        const text = getSelectionRangeText();
-        if (!text.trim()) {
-            showToast('No readable text in the selection', 'error');
+        const controller = ttsControllerRef.current;
+        const selection = window.getSelection();
+        const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+        const map = charSpanMapRef.current;
+        if (range && map) {
+            const located = rangeToTextWithOffsets(range, map);
+            if (located && located.text.trim()) {
+                controller?.play(located.text, 'Listening to selection', { baseOffset: located.start });
+                hideSelectionMenu();
+                clearBrowserSelection();
+                return;
+            }
+        }
+        const fallback = selectionMenu.text;
+        if (fallback.trim()) {
+            controller?.play(fallback, 'Listening to selection', { highlight: false });
+            hideSelectionMenu();
+            clearBrowserSelection();
             return;
         }
-        ttsControllerRef.current?.play(text, 'Listening to selection');
-        hideSelectionMenu();
-        clearBrowserSelection();
-    }, [getSelectionRangeText, showToast, hideSelectionMenu, clearBrowserSelection]);
+        showToast('No readable text in the selection', 'error');
+    }, [selectionMenu.text, showToast, hideSelectionMenu, clearBrowserSelection]);
 
     const handleReadPageToggle = useCallback(() => {
         const controller = ttsControllerRef.current;
@@ -1694,6 +1699,7 @@ export default function ReaderPage() {
             {selectionMenu.visible && (
                 <div
                     ref={selectionMenuRef}
+                    onMouseDown={(e) => e.preventDefault()}
                     style={{
                         position: 'fixed',
                         left: selectionMenu.x,
