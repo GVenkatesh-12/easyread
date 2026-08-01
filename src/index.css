@@ -242,6 +242,13 @@ body {
   background: transparent;
 }
 
+.pdf-text-layer span.tts-active {
+  background: color-mix(in srgb, var(--color-accent), transparent 55%);
+  color: var(--color-text);
+  border-radius: 2px;
+  transition: background 0.1s ease;
+}
+
 .pdf-theme-default canvas { filter: none; }
 .pdf-theme-dark canvas { filter: invert(0.88) hue-rotate(180deg); }
 .pdf-theme-sepia canvas { filter: sepia(0.4) brightness(0.95) contrast(1.05); }

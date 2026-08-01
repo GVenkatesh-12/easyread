@@ -6,6 +6,7 @@ import Navbar from '../components/Navbar';
 import { useToast } from '../components/Toast';
 import * as api from '../services/api';
 import type { Book, Note, VocabEntry } from '../services/api';
+import { TtsController, buildCharSpanMap, type CharSpanMap, type TtsStatus } from '../services/tts';
 import {
     ChevronLeft,
     ChevronRight,
@@ -26,6 +27,9 @@ import {
     Eye,
     Copy,
     Columns2,
+    Volume2,
+    Pause,
+    Square,
 } from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -120,6 +124,9 @@ export default function ReaderPage() {
     const [addingNote, setAddingNote] = useState(false);
     const [addingVocab, setAddingVocab] = useState(false);
 
+    const [ttsStatus, setTtsStatus] = useState<TtsStatus>('idle');
+    const [ttsLabel, setTtsLabel] = useState('');
+
     const [noteTitle, setNoteTitle] = useState('');
     const [noteContent, setNoteContent] = useState('');
     const [editingNote, setEditingNote] = useState<string | null>(null);
@@ -146,6 +153,31 @@ export default function ReaderPage() {
     const textLayerTaskRef = useRef<pdfjsLib.TextLayer | null>(null);
     const renderCycleRef = useRef(0);
     const pageCacheRef = useRef<Map<number, pdfjsLib.PDFPageProxy>>(new Map());
+    const ttsControllerRef = useRef<TtsController | null>(null);
+    const charSpanMapRef = useRef<CharSpanMap | null>(null);
+
+    useEffect(() => {
+        const controller = new TtsController({
+            onStatusChange: (status, label) => {
+                setTtsStatus(status);
+                setTtsLabel(label);
+            },
+            onError: (message) => showToast(message, 'error'),
+        });
+        ttsControllerRef.current = controller;
+        return () => {
+            controller.dispose();
+            ttsControllerRef.current = null;
+        };
+    }, [showToast]);
+
+    const prevPageRef = useRef(currentPage);
+    useEffect(() => {
+        if (prevPageRef.current !== currentPage) {
+            prevPageRef.current = currentPage;
+            ttsControllerRef.current?.stop();
+        }
+    }, [currentPage]);
 
     useEffect(() => {
         if (!bookId) return;
@@ -267,7 +299,7 @@ export default function ReaderPage() {
     }, []);
 
     const getSelectionMenuPosition = useCallback((range: Range) => {
-        return getFloatingPosition(range, { width: 220, height: 48 });
+        return getFloatingPosition(range, { width: 300, height: 48 });
     }, [getFloatingPosition]);
 
     const syncSelectionMenu = useCallback(() => {
@@ -379,6 +411,10 @@ export default function ReaderPage() {
             const endOfContent = document.createElement('div');
             endOfContent.className = 'endOfContent';
             textLayer.append(endOfContent);
+
+            const charSpanMap = buildCharSpanMap(textLayer);
+            charSpanMapRef.current = charSpanMap;
+            ttsControllerRef.current?.setCharSpanMap(charSpanMap);
         } catch (err) {
             if (!(err instanceof Error && (err.name === 'RenderingCancelledException' || err.name === 'AbortException'))) {
                 console.error('Render error:', err);
@@ -700,6 +736,54 @@ export default function ReaderPage() {
         }
     };
 
+    const getSelectionRangeText = useCallback(() => {
+        const selection = window.getSelection();
+        if (!isSelectionInsideTextLayer(selection) || !selection || selection.rangeCount === 0) {
+            return '';
+        }
+        return selection.getRangeAt(0).cloneContents().textContent ?? '';
+    }, [isSelectionInsideTextLayer]);
+
+    const handleListenSelection = useCallback(() => {
+        const text = getSelectionRangeText();
+        if (!text.trim()) {
+            showToast('No readable text in the selection', 'error');
+            return;
+        }
+        ttsControllerRef.current?.play(text, 'Listening to selection');
+        hideSelectionMenu();
+        clearBrowserSelection();
+    }, [getSelectionRangeText, showToast, hideSelectionMenu, clearBrowserSelection]);
+
+    const handleReadPageToggle = useCallback(() => {
+        const controller = ttsControllerRef.current;
+        if (!controller) return;
+        if (controller.isActive()) {
+            controller.stop();
+            return;
+        }
+        const text = charSpanMapRef.current?.text ?? '';
+        if (!text.trim()) {
+            showToast('No readable text found on this page', 'error');
+            return;
+        }
+        controller.play(text, `Reading page ${currentPage}`);
+    }, [currentPage, showToast]);
+
+    const handleToggleTtsPlayback = useCallback(() => {
+        const controller = ttsControllerRef.current;
+        if (!controller) return;
+        if (controller.getStatus() === 'playing') {
+            controller.pause();
+        } else if (controller.getStatus() === 'paused') {
+            controller.resume();
+        }
+    }, []);
+
+    const handleStopTts = useCallback(() => {
+        ttsControllerRef.current?.stop();
+    }, []);
+
     useEffect(() => {
         const handleKey = (e: KeyboardEvent) => {
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -992,6 +1076,38 @@ export default function ReaderPage() {
                                     border: '1px solid var(--color-border)',
                                 }}
                             >
+                                {/* Read page aloud */}
+                                <button
+                                    onClick={handleReadPageToggle}
+                                    title={ttsStatus !== 'idle' ? 'Stop listening' : 'Read page aloud'}
+                                    style={{
+                                        background: ttsStatus !== 'idle' ? 'var(--color-accent-soft)' : 'transparent',
+                                        border: 'none',
+                                        borderRadius: 'var(--radius-full)',
+                                        height: '32px',
+                                        padding: isMobileViewport ? '0 8px' : '0 10px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        color: ttsStatus !== 'idle' ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 500,
+                                        transition: 'background 0.15s',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                    onMouseEnter={e => { if (ttsStatus === 'idle') e.currentTarget.style.background = 'var(--color-surface-hover)'; }}
+                                    onMouseLeave={e => { if (ttsStatus === 'idle') e.currentTarget.style.background = 'transparent'; }}
+                                    aria-label="Read page aloud"
+                                >
+                                    {ttsStatus === 'playing' || ttsStatus === 'loading' ? <Pause size={15} /> : <Volume2 size={15} />}
+                                    {!isMobileViewport && (ttsStatus !== 'idle' ? 'Stop' : 'Read page')}
+                                </button>
+
+                                {!isMobileViewport && (
+                                    <div style={{ width: '1px', height: '20px', background: 'var(--color-border)', flexShrink: 0 }} />
+                                )}
+
                                 {/* Page width toggle */}
                                 <button
                                     onClick={cyclePageWidth}
@@ -1614,6 +1730,26 @@ export default function ReaderPage() {
                         <Copy size={14} />
                         Copy
                     </button>
+                    <button
+                        onClick={handleListenSelection}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            height: '34px',
+                            padding: '0 12px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: 'var(--color-text)',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                        }}
+                    >
+                        <Volume2 size={14} />
+                        Listen
+                    </button>
                     {isSingleWordSelection ? (
                         <button
                             onClick={handleSelectionToVocab}
@@ -1657,6 +1793,80 @@ export default function ReaderPage() {
                             Note
                         </button>
                     )}
+                </div>
+            )}
+            {ttsStatus !== 'idle' && (
+                <div
+                    className="animate-fade-in"
+                    style={{
+                        position: 'fixed',
+                        top: '64px',
+                        right: '16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 8px 6px 10px',
+                        borderRadius: 'var(--radius-full)',
+                        background: 'var(--color-surface)',
+                        border: '1px solid var(--color-border)',
+                        boxShadow: 'var(--shadow-3)',
+                        zIndex: 130,
+                        maxWidth: 'calc(100vw - 24px)',
+                    }}
+                >
+                    {ttsStatus === 'loading' ? (
+                        <Loader2 size={16} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
+                    ) : (
+                        <button
+                            onClick={handleToggleTtsPlayback}
+                            aria-label={ttsStatus === 'paused' ? 'Resume listening' : 'Pause listening'}
+                            style={{
+                                background: 'transparent',
+                                border: 'none',
+                                borderRadius: 'var(--radius-full)',
+                                width: '30px',
+                                height: '30px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--color-text)',
+                            }}
+                        >
+                            {ttsStatus === 'paused' ? <Volume2 size={16} /> : <Pause size={16} />}
+                        </button>
+                    )}
+                    <span
+                        style={{
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                            color: 'var(--color-text)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            maxWidth: '170px',
+                        }}
+                    >
+                        {ttsStatus === 'loading' ? `${ttsLabel}…` : ttsLabel}
+                    </span>
+                    <button
+                        onClick={handleStopTts}
+                        aria-label="Stop listening"
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            width: '30px',
+                            height: '30px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--color-text-secondary)',
+                        }}
+                    >
+                        <Square size={14} />
+                    </button>
                 </div>
             )}
             {selectionLookup.visible && (

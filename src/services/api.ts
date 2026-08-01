@@ -251,3 +251,23 @@ export async function deleteNote(bookId: string, noteId: string) {
         method: 'DELETE',
     });
 }
+
+/* ── Text-to-speech ──────────────────────────────────────────── */
+export interface TtsAlignment {
+    characters: string[];
+    character_start_times_seconds: number[];
+    character_end_times_seconds: number[];
+}
+
+export interface TtsSynthesisResult {
+    audioBase64: string;
+    alignment: TtsAlignment | null;
+}
+
+export async function synthesizeSpeech(text: string, signal?: AbortSignal) {
+    return request<TtsSynthesisResult>('/tts/synthesize', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+        signal,
+    });
+}
