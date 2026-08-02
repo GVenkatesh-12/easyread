@@ -253,7 +253,6 @@ body {
 
 .pdf-text-layer span.tts-active {
   background: color-mix(in srgb, var(--color-accent), transparent 50%);
-  color: var(--color-text);
   border-radius: 2px;
 }
 
