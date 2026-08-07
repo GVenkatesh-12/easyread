@@ -25,11 +25,16 @@ export interface TtsControllerCallbacks {
     onError?: (message: string) => void;
 }
 
-const DEFAULT_CHUNK_SIZE = 4000;
+// Chunks stay well under the model's few-minute quality envelope: the
+// gemini-3.1-flash-tts-preview docs warn output quality (incl. repetition)
+// drifts on long transcripts. 1500 chars is ~1.5-2 min of speech.
+const DEFAULT_CHUNK_SIZE = 1500;
 const WORD_SPLIT_THRESHOLD = 12;
 const DEFAULT_SAMPLE_RATE = 24000;
 /** Seconds of audio to accumulate before handing a playable segment to the queue. */
 const SEGMENT_TARGET_SECONDS = 1.5;
+/** Speech-rate estimate used for highlighting while a chunk is still streaming. */
+const CHARS_PER_SECOND = 14;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -482,6 +487,9 @@ export class TtsController {
         const targetSamples = Math.floor(pending.sampleRate * SEGMENT_TARGET_SECONDS);
         if ((pending.accumulator[0]?.length ?? 0) >= targetSamples) {
             this.finalizeSegment(index);
+        } else if (pending.done) {
+            // Stream already finalized while this delta was decoding: flush it.
+            this.finalizeSegment(index);
         }
     }
 
@@ -677,10 +685,16 @@ export class TtsController {
         // Position within the chunk's audio timeline: completed segments of this
         // chunk plus how far the current segment has played.
         const chunkElapsed = piece.startInChunk + (ctx.currentTime - current.startTime);
-        // Exact once the chunk has finished streaming; otherwise a live estimate
-        // (received audio grows at generation speed, so the ratio stays stable).
-        const receivedSeconds = pending.receivedSeconds + ((pending.accumulator?.[0]?.length ?? 0) / pending.sampleRate);
-        const duration = Math.max(receivedSeconds, chunkElapsed);
+
+        // Duration estimate. While the chunk streams, use a constant speech-rate
+        // estimate so the highlight moves forward smoothly; once the chunk is
+        // done, blend toward the exact duration (monotonic, no jumps).
+        const rateEstimate = piece.text.length / CHARS_PER_SECOND;
+        let duration = rateEstimate;
+        if (pending.done && pending.receivedSeconds > 0) {
+            const blend = Math.min(1, chunkElapsed / pending.receivedSeconds);
+            duration = rateEstimate + (pending.receivedSeconds - rateEstimate) * blend;
+        }
         const fraction = duration > 0 ? Math.min(1, Math.max(0, chunkElapsed / duration)) : 0;
         const textIndex = Math.min(piece.text.length - 1, Math.floor(fraction * piece.text.length));
 

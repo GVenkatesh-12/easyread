@@ -337,7 +337,9 @@ export async function streamSpeech(
             }
 
             if (message.type === 'audio' && typeof message.data === 'string') {
-                handlers.onAudio({
+                // Await so decode/accumulate completes before the stream resolves;
+                // otherwise late deltas can race chunk finalization and be dropped.
+                await handlers.onAudio({
                     data: message.data,
                     mimeType: message.mimeType || 'audio/l16',
                     sampleRate: message.sampleRate || 24000,
