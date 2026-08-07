@@ -32,7 +32,11 @@ const DEFAULT_CHUNK_SIZE = 1500;
 const WORD_SPLIT_THRESHOLD = 12;
 const DEFAULT_SAMPLE_RATE = 24000;
 /** Seconds of audio to accumulate before handing a playable segment to the queue. */
-const SEGMENT_TARGET_SECONDS = 1.5;
+const SEGMENT_TARGET_SECONDS = 1.0;
+/** Buffer this much audio before starting playback, so generation jitter never stutters. */
+const PLAY_START_PREROLL_SECONDS = 5;
+/** When the playing chunk's buffer drops below this, start the next chunk's stream early. */
+const EARLY_START_THRESHOLD_SECONDS = 6;
 /** Speech-rate estimate used for highlighting while a chunk is still streaming. */
 const CHARS_PER_SECOND = 14;
 
@@ -312,7 +316,11 @@ export class TtsController {
     private abortController: AbortController | null = null;
     private chunks: TextChunk[] = [];
     private pendingChunks: PendingChunk[] = [];
-    private readyQueue: PlayableChunk[] = [];
+    /** Per-chunk FIFO of playable segments; ordered so chunks never interleave. */
+    private queues: PlayableChunk[][] = [];
+    private currentChunkIndex = 0;
+    private hasStartedPlayback = false;
+    private streamsStarted: boolean[] = [];
     /** Cumulative seconds of audio enqueued per chunk (used for highlight mapping). */
     private chunkEnqueuedSeconds: number[] = [];
     private playing: ActiveSource | null = null;
@@ -379,7 +387,10 @@ export class TtsController {
             done: false,
         }));
         this.chunkEnqueuedSeconds = new Array(chunks.length).fill(0);
-        this.readyQueue = [];
+        this.queues = chunks.map(() => []);
+        this.currentChunkIndex = 0;
+        this.hasStartedPlayback = false;
+        this.streamsStarted = chunks.map((_, i) => i === 0);
         this.segmentsEnqueued = 0;
         this.diagLogged = false;
         this.aborted = false;
@@ -439,9 +450,10 @@ export class TtsController {
             if (this.aborted || session !== this.sessionId) return;
             this.finalizeChunk(index);
 
-            if (index + 1 < this.chunks.length) {
+            if (index + 1 < this.chunks.length && !this.streamsStarted[index + 1]) {
+                this.streamsStarted[index + 1] = true;
                 void this.streamChunk(index + 1);
-            } else if (!this.playing && this.readyQueue.length === 0) {
+            } else if (index + 1 >= this.chunks.length && !this.playing && this.queues[index].length === 0) {
                 this.finishPlayback();
             }
         } catch (err) {
@@ -545,7 +557,7 @@ export class TtsController {
         pending.accumulator = null;
         pending.receivedSeconds += buffer.duration;
 
-        this.readyQueue.push({
+        this.queues[index].push({
             buffer,
             text: pending.text,
             offset: pending.offset,
@@ -570,41 +582,82 @@ export class TtsController {
         const ctx = this.audioContext;
         if (!ctx) return;
 
-        while (this.readyQueue.length > 0) {
-            const item = this.readyQueue.shift();
-            if (!item) continue;
-
-            const source = ctx.createBufferSource();
-            source.buffer = item.buffer;
-            source.connect(ctx.destination);
-
-            this.playing = {
-                source,
-                piece: item,
-                startTime: ctx.currentTime,
-            };
-
-            source.onended = () => {
-                if (this.playing?.source !== source) return;
-                this.playing = null;
-                if (this.status === 'paused') return;
-                if (this.readyQueue.length > 0) {
-                    this.playNext();
-                } else if (this.pendingChunks.every((pending) => pending.done)) {
-                    this.finishPlayback();
-                } else {
-                    this.setStatus('loading', this.label);
-                }
-            };
-
-            source.start();
-            // The context is created within the user gesture, but re-resume here
-            // in case the browser suspended it before the first segment arrived.
-            if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
-            this.setStatus('playing', this.label);
-            this.startHighlightLoop();
+        // Advance to the next chunk once the current one is fully drained.
+        while (
+            this.currentChunkIndex < this.chunks.length &&
+            this.queues[this.currentChunkIndex].length === 0 &&
+            this.pendingChunks[this.currentChunkIndex]?.done
+        ) {
+            this.currentChunkIndex++;
+        }
+        if (this.currentChunkIndex >= this.chunks.length) {
+            if (this.pendingChunks.every((pending) => pending.done)) this.finishPlayback();
             return;
         }
+
+        const queue = this.queues[this.currentChunkIndex];
+        if (queue.length === 0) return; // Current chunk still streaming; stay loading.
+
+        // Pre-roll: hold playback until the first chunk has buffered enough audio
+        // so generation jitter cannot cause audible stutter.
+        if (!this.hasStartedPlayback) {
+            const queuedSeconds = queue.reduce((sum, piece) => sum + piece.buffer.duration, 0);
+            const chunkDone = this.pendingChunks[this.currentChunkIndex]?.done;
+            if (!chunkDone && queuedSeconds < PLAY_START_PREROLL_SECONDS) return;
+            this.hasStartedPlayback = true;
+        }
+
+        const item = queue.shift();
+        if (!item) return;
+
+        const source = ctx.createBufferSource();
+        source.buffer = item.buffer;
+        source.connect(ctx.destination);
+
+        this.playing = {
+            source,
+            piece: item,
+            startTime: ctx.currentTime,
+        };
+
+        source.onended = () => {
+            if (this.playing?.source !== source) return;
+            this.playing = null;
+            if (this.status === 'paused') return;
+            this.playNext();
+            if (!this.playing && this.status !== 'idle') {
+                this.setStatus('loading', this.label);
+            }
+        };
+
+        source.start();
+        // The context is created within the user gesture, but re-resume here
+        // in case the browser suspended it before the first segment arrived.
+        if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+        this.setStatus('playing', this.label);
+        this.startHighlightLoop();
+        this.maybeStartNextStream();
+    }
+
+    /**
+     * Start the next chunk's stream while the current one still plays, so the
+     * model's prefill at chunk boundaries happens behind the buffer instead of
+     * as an audible pause. Segments go to that chunk's own queue, preserving
+     * playback order.
+     */
+    private maybeStartNextStream() {
+        const index = this.currentChunkIndex;
+        const next = index + 1;
+        if (next >= this.chunks.length || this.streamsStarted[next]) return;
+
+        if (!this.pendingChunks[index]?.done) {
+            // Current chunk still streaming: only pre-start when its buffer is low.
+            const queuedSeconds = this.queues[index].reduce((sum, piece) => sum + piece.buffer.duration, 0);
+            if (queuedSeconds >= EARLY_START_THRESHOLD_SECONDS) return;
+        }
+
+        this.streamsStarted[next] = true;
+        void this.streamChunk(next);
     }
 
     private finishPlayback() {
@@ -630,10 +683,13 @@ export class TtsController {
             this.playing.source.disconnect();
         }
         this.playing = null;
-        this.readyQueue = [];
+        this.queues = [];
         this.pendingChunks = [];
         this.chunkEnqueuedSeconds = [];
         this.chunks = [];
+        this.currentChunkIndex = 0;
+        this.hasStartedPlayback = false;
+        this.streamsStarted = [];
         this.stopHighlightLoop();
         this.clearHighlight();
 
