@@ -1,4 +1,4 @@
-import { synthesizeSpeech, type TtsAlignment } from './api';
+import { streamSpeech, type StreamAudioChunk } from './api';
 
 export type TtsStatus = 'idle' | 'loading' | 'playing' | 'paused';
 
@@ -25,17 +25,9 @@ export interface TtsControllerCallbacks {
     onError?: (message: string) => void;
 }
 
-interface LoadedChunk {
-    text: string;
-    offset: number;
-    audioUrl: string;
-    alignment: TtsAlignment | null;
-    alignmentMap: number[] | null;
-}
-
 const DEFAULT_CHUNK_SIZE = 4000;
-const ALIGNMENT_RESYNC_WINDOW = 24;
 const WORD_SPLIT_THRESHOLD = 12;
+const DEFAULT_SAMPLE_RATE = 24000;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -194,45 +186,6 @@ function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
     return bytes;
 }
 
-function buildAlignmentMap(alignChars: string[], text: string): number[] {
-    const map = new Array<number>(alignChars.length);
-    let p = 0;
-
-    for (let q = 0; q < alignChars.length; q++) {
-        const ac = alignChars[q];
-        if (p >= text.length) {
-            map[q] = text.length - 1;
-            continue;
-        }
-
-        if (ac === text[p] || (isWhitespace(ac) && isWhitespace(text[p]))) {
-            map[q] = p;
-            p++;
-            continue;
-        }
-
-        let found = -1;
-        const limit = Math.min(p + ALIGNMENT_RESYNC_WINDOW, text.length - 1);
-        for (let s = 1; p + s <= limit; s++) {
-            const tc = text[p + s];
-            if (ac === tc || (isWhitespace(ac) && isWhitespace(tc))) {
-                found = p + s;
-                break;
-            }
-        }
-
-        if (found !== -1) {
-            p = found;
-            map[q] = p;
-            p++;
-        } else {
-            map[q] = p;
-        }
-    }
-
-    return map;
-}
-
 function expandWordStart(text: string, idx: number): number {
     let s = Math.max(0, Math.min(idx, text.length - 1));
     while (s > 0 && !isWhitespace(text[s - 1])) s--;
@@ -245,13 +198,83 @@ function expandWordEnd(text: string, idx: number): number {
     return e;
 }
 
+/* ── Streaming audio pipeline ────────────────────────────────── */
+
+/** Growable Float32 sample buffer that avoids per-delta reallocations. */
+class SampleBuffer {
+    private data = new Float32Array(4096);
+    private len = 0;
+
+    append(samples: Float32Array) {
+        if (this.len + samples.length > this.data.length) {
+            let capacity = this.data.length * 2;
+            while (capacity < this.len + samples.length) capacity *= 2;
+            const next = new Float32Array(capacity);
+            next.set(this.data.subarray(0, this.len));
+            this.data = next;
+        }
+        this.data.set(samples, this.len);
+        this.len += samples.length;
+    }
+
+    toFloat32Array(): Float32Array<ArrayBuffer> {
+        return this.len === this.data.length ? this.data : this.data.subarray(0, this.len);
+    }
+
+    get length() {
+        return this.len;
+    }
+}
+
+/** Decode a raw 16-bit little-endian PCM delta (audio/l16 or audio/pcm). */
+function decodePcmDelta(chunk: StreamAudioChunk): { channelData: Float32Array[]; channels: number; sampleRate: number } {
+    const bytes = base64ToUint8Array(chunk.data);
+    const channels = Math.max(1, Math.floor(chunk.channels) || 1);
+    const sampleRate = chunk.sampleRate || DEFAULT_SAMPLE_RATE;
+    const totalSamples = Math.floor(bytes.byteLength / 2);
+    const perChannel = Math.floor(totalSamples / channels);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const channelData: Float32Array[] = [];
+    for (let c = 0; c < channels; c++) {
+        const out = new Float32Array(perChannel);
+        for (let j = 0; j < perChannel; j++) {
+            out[j] = view.getInt16((j * channels + c) * 2, true) / 32768;
+        }
+        channelData.push(out);
+    }
+    return { channelData, channels, sampleRate };
+}
+
+interface PendingChunk {
+    text: string;
+    offset: number;
+    channelData: SampleBuffer[];
+    sampleRate: number;
+    channels: number;
+    done: boolean;
+}
+
+interface PlayableChunk {
+    buffer: AudioBuffer | null;
+    text: string;
+    offset: number;
+}
+
+interface ActiveSource {
+    source: AudioBufferSourceNode;
+    buffer: AudioBuffer;
+    text: string;
+    offset: number;
+    startTime: number;
+}
+
 export class TtsController {
-    private audio: HTMLAudioElement | null = null;
+    private audioContext: AudioContext | null = null;
     private abortController: AbortController | null = null;
-    private chunks: (LoadedChunk | undefined)[] = [];
-    private nextPlayIndex = 0;
-    private playingIndex: number | null = null;
-    private totalChunks = 0;
+    private chunks: TextChunk[] = [];
+    private pendingChunks: PendingChunk[] = [];
+    private readyQueue: PlayableChunk[] = [];
+    private playing: ActiveSource | null = null;
     private aborted = false;
     private sessionId = 0;
     private charSpanMap: CharSpanMap | null = null;
@@ -260,7 +283,6 @@ export class TtsController {
     private callbacks: TtsControllerCallbacks = {};
     private status: TtsStatus = 'idle';
     private label = '';
-    private currentChunk: LoadedChunk | null = null;
     private baseOffset = 0;
     private highlightEnabled = true;
 
@@ -286,44 +308,58 @@ export class TtsController {
         this.label = label;
         this.baseOffset = options?.baseOffset ?? 0;
         this.highlightEnabled = options?.highlight ?? true;
+
         const chunks = chunkText(text);
         if (chunks.length === 0) {
             this.emitError('No readable text found to speak.');
             return;
         }
 
-        this.totalChunks = chunks.length;
-        this.chunks = new Array(chunks.length);
-        this.nextPlayIndex = 0;
+        let ctx: AudioContext;
+        try {
+            ctx = new AudioContext();
+        } catch {
+            this.emitError('Audio playback is not supported in this browser.');
+            return;
+        }
+        void ctx.resume().catch(() => {});
+
+        this.audioContext = ctx;
+        this.chunks = chunks;
+        this.pendingChunks = chunks.map((chunk) => ({
+            text: chunk.text,
+            offset: chunk.offset,
+            channelData: [],
+            sampleRate: DEFAULT_SAMPLE_RATE,
+            channels: 1,
+            done: false,
+        }));
+        this.readyQueue = [];
         this.aborted = false;
         this.sessionId++;
         this.abortController = new AbortController();
-        this.setStatus('loading', label);
 
-        for (let i = 0; i < chunks.length; i++) {
-            void this.fetchChunk(chunks[i], i);
-        }
+        this.setStatus('loading', label);
+        void this.streamChunk(0);
     }
 
     pause() {
         if (this.status !== 'playing') return;
-        this.audio?.pause();
+        void this.audioContext?.suspend();
         this.stopHighlightLoop();
         this.setStatus('paused', this.label);
     }
 
     resume() {
         if (this.status !== 'paused') return;
-        if (this.audio) {
-            void this.audio
-                .play()
-                .then(() => this.setStatus('playing', this.label))
-                .catch(() => {});
+        void this.audioContext?.resume();
+        if (this.playing) {
             this.startHighlightLoop();
-            return;
+            this.setStatus('playing', this.label);
+        } else {
+            this.setStatus('loading', this.label);
+            this.playNext();
         }
-        this.setStatus('loading', this.label);
-        this.maybePlayNext();
     }
 
     stop() {
@@ -336,94 +372,173 @@ export class TtsController {
         this.callbacks = {};
     }
 
-    private async fetchChunk(chunk: TextChunk, index: number) {
+    /** Stream one chunk from the server, then pipeline the next chunk's stream. */
+    private async streamChunk(index: number) {
+        const chunk = this.chunks[index];
         const signal = this.abortController?.signal;
         const session = this.sessionId;
         try {
-            const result = await synthesizeSpeech(chunk.text, signal);
-            if (this.aborted || session !== this.sessionId) return;
-
-            const audioUrl = URL.createObjectURL(
-                new Blob([base64ToUint8Array(result.audioBase64)], { type: 'audio/mpeg' }),
+            await streamSpeech(
+                chunk.text,
+                {
+                    onAudio: async (audio) => {
+                        if (this.aborted || session !== this.sessionId) return;
+                        await this.appendAudio(index, audio);
+                    },
+                },
+                signal,
             );
 
-            const loaded: LoadedChunk = {
-                text: chunk.text,
-                offset: chunk.offset,
-                audioUrl,
-                alignment: result.alignment,
-                alignmentMap: result.alignment
-                    ? buildAlignmentMap(result.alignment.characters, chunk.text)
-                    : null,
-            };
-            this.chunks[index] = loaded;
-            this.maybePlayNext();
+            if (this.aborted || session !== this.sessionId) return;
+            this.finalizeChunk(index);
+
+            if (index + 1 < this.chunks.length) {
+                void this.streamChunk(index + 1);
+            } else if (!this.playing && this.readyQueue.length === 0) {
+                this.finishPlayback();
+            }
         } catch (err) {
             if (this.aborted || session !== this.sessionId || signal?.aborted) return;
             this.emitError(err instanceof Error ? err.message : 'Failed to generate speech.');
             this.stopInternal();
+            this.setStatus('idle', '');
         }
     }
 
-    private maybePlayNext() {
-        if (this.playingIndex !== null) return;
-        if (this.nextPlayIndex >= this.totalChunks) return;
-        const chunk = this.chunks[this.nextPlayIndex];
-        if (!chunk) return;
-        this.playChunk(chunk, this.nextPlayIndex);
+    private async appendAudio(index: number, chunk: StreamAudioChunk) {
+        const pending = this.pendingChunks[index];
+        const ctx = this.audioContext;
+        if (!pending || !ctx) return;
+
+        let decoded: { channelData: Float32Array[]; channels: number; sampleRate: number };
+        try {
+            decoded = await this.decodeDelta(chunk, ctx);
+        } catch (err) {
+            // If nothing has played for this chunk yet, surface the failure.
+            if (pending.channelData.length === 0) throw err;
+            console.error('TTS audio decode error:', err);
+            return;
+        }
+
+        pending.channels = decoded.channels;
+        pending.sampleRate = decoded.sampleRate;
+        for (let c = 0; c < decoded.channelData.length; c++) {
+            if (!pending.channelData[c]) pending.channelData[c] = new SampleBuffer();
+            pending.channelData[c].append(decoded.channelData[c]);
+        }
     }
 
-    private playChunk(chunk: LoadedChunk, index: number) {
-        this.playingIndex = index;
-        this.currentChunk = chunk;
+    private async decodeDelta(
+        chunk: StreamAudioChunk,
+        ctx: AudioContext,
+    ): Promise<{ channelData: Float32Array[]; channels: number; sampleRate: number }> {
+        const mime = chunk.mimeType || 'audio/l16';
+        if (mime === 'audio/l16' || mime === 'audio/pcm') {
+            return decodePcmDelta(chunk);
+        }
+        // WAV/MP3/OGG deltas: decode via Web Audio.
+        const bytes = base64ToUint8Array(chunk.data);
+        const buffer = await ctx.decodeAudioData(bytes.buffer);
+        const channelData: Float32Array[] = [];
+        for (let c = 0; c < buffer.numberOfChannels; c++) {
+            channelData.push(buffer.getChannelData(c).slice());
+        }
+        return { channelData, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate };
+    }
 
-        const audio = new Audio(chunk.audioUrl);
-        this.audio = audio;
-        audio.onended = () => {
-            if (this.playingIndex !== index) return;
-            this.playingIndex = null;
-            this.currentChunk = null;
-            this.nextPlayIndex = index + 1;
+    private finalizeChunk(index: number) {
+        const pending = this.pendingChunks[index];
+        if (!pending || pending.done) return;
+        pending.done = true;
 
-            if (this.nextPlayIndex >= this.totalChunks) {
-                this.stopInternal();
-                this.setStatus('idle', '');
-                return;
+        const length = pending.channelData[0]?.length ?? 0;
+        const ctx = this.audioContext;
+        if (ctx && length > 0) {
+            const buffer = new AudioBuffer({
+                numberOfChannels: Math.min(pending.channels, pending.channelData.length),
+                length,
+                sampleRate: pending.sampleRate,
+            });
+            for (let c = 0; c < buffer.numberOfChannels; c++) {
+                buffer.copyToChannel(pending.channelData[c].toFloat32Array(), c);
             }
-            if (this.status === 'paused') return;
-            this.setStatus('loading', this.label);
-            this.maybePlayNext();
-        };
+            this.readyQueue.push({ buffer, text: pending.text, offset: pending.offset });
+        }
+        this.playNext();
+    }
 
-        this.startHighlightLoop();
-        void audio
-            .play()
-            .then(() => {
-                if (this.playingIndex === index) this.setStatus('playing', this.label);
-            })
-            .catch(() => {});
+    private playNext() {
+        if (this.playing || this.status === 'paused') return;
+        const ctx = this.audioContext;
+        if (!ctx) return;
+
+        while (this.readyQueue.length > 0) {
+            const item = this.readyQueue.shift();
+            if (!item || !item.buffer) continue;
+
+            const source = ctx.createBufferSource();
+            source.buffer = item.buffer;
+            source.connect(ctx.destination);
+
+            this.playing = {
+                source,
+                buffer: item.buffer,
+                text: item.text,
+                offset: item.offset,
+                startTime: ctx.currentTime,
+            };
+
+            source.onended = () => {
+                if (this.playing?.source !== source) return;
+                this.playing = null;
+                if (this.status === 'paused') return;
+                if (this.readyQueue.length > 0) {
+                    this.playNext();
+                } else if (this.pendingChunks.every((pending) => pending.done)) {
+                    this.finishPlayback();
+                } else {
+                    this.setStatus('loading', this.label);
+                }
+            };
+
+            source.start();
+            this.setStatus('playing', this.label);
+            this.startHighlightLoop();
+            return;
+        }
+    }
+
+    private finishPlayback() {
+        this.stopInternal();
+        this.setStatus('idle', '');
     }
 
     private stopInternal() {
         this.aborted = true;
         this.abortController?.abort();
         this.abortController = null;
-        this.audio?.pause();
-        if (this.audio) {
-            this.audio.removeAttribute('src');
-            this.audio.load();
+
+        if (this.playing?.source) {
+            this.playing.source.onended = null;
+            try {
+                this.playing.source.stop();
+            } catch {
+                // Source may already have stopped.
+            }
+            this.playing.source.disconnect();
         }
-        this.audio = null;
-        this.stopHighlightLoop();
-        for (const chunk of this.chunks) {
-            if (chunk) URL.revokeObjectURL(chunk.audioUrl);
-        }
+        this.playing = null;
+        this.readyQueue = [];
+        this.pendingChunks = [];
         this.chunks = [];
-        this.totalChunks = 0;
-        this.nextPlayIndex = 0;
-        this.playingIndex = null;
-        this.currentChunk = null;
+        this.stopHighlightLoop();
         this.clearHighlight();
+
+        const ctx = this.audioContext;
+        this.audioContext = null;
+        if (ctx && ctx.state !== 'closed') {
+            void ctx.close().catch(() => {});
+        }
     }
 
     private setStatus(status: TtsStatus, label: string) {
@@ -440,7 +555,7 @@ export class TtsController {
     private startHighlightLoop() {
         this.stopHighlightLoop();
         const tick = () => {
-            if (!this.audio || !this.currentChunk) return;
+            if (!this.playing) return;
             this.updateHighlight();
             this.rafId = requestAnimationFrame(tick);
         };
@@ -456,36 +571,17 @@ export class TtsController {
 
     private updateHighlight() {
         if (!this.highlightEnabled) return;
-        const audio = this.audio;
-        const chunk = this.currentChunk;
-        if (!audio || !chunk || !this.charSpanMap) return;
+        const ctx = this.audioContext;
+        const current = this.playing;
+        if (!ctx || !current || !this.charSpanMap) return;
 
-        const time = audio.currentTime;
-        let textIndex: number;
+        const elapsed = ctx.currentTime - current.startTime;
+        const duration = current.buffer.duration;
+        const fraction = duration > 0 ? Math.min(1, Math.max(0, elapsed / duration)) : 0;
+        const textIndex = Math.min(current.text.length - 1, Math.floor(fraction * current.text.length));
 
-        if (chunk.alignment && chunk.alignment.character_start_times_seconds.length > 0 && chunk.alignmentMap) {
-            const starts = chunk.alignment.character_start_times_seconds;
-            let lo = 0;
-            let hi = starts.length - 1;
-            let q = 0;
-            while (lo <= hi) {
-                const mid = (lo + hi) >> 1;
-                if (starts[mid] <= time) {
-                    q = mid;
-                    lo = mid + 1;
-                } else {
-                    hi = mid - 1;
-                }
-            }
-            textIndex = chunk.alignmentMap[q] ?? 0;
-        } else {
-            const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 1;
-            const fraction = Math.min(1, time / duration);
-            textIndex = Math.min(chunk.text.length - 1, Math.floor(fraction * chunk.text.length));
-        }
-
-        const wordStart = this.baseOffset + chunk.offset + expandWordStart(chunk.text, textIndex);
-        const wordEnd = this.baseOffset + chunk.offset + expandWordEnd(chunk.text, textIndex);
+        const wordStart = this.baseOffset + current.offset + expandWordStart(current.text, textIndex);
+        const wordEnd = this.baseOffset + current.offset + expandWordEnd(current.text, textIndex);
         this.applyHighlight(wordStart, wordEnd);
     }
 

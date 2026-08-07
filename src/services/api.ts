@@ -254,21 +254,81 @@ export async function deleteNote(bookId: string, noteId: string) {
 }
 
 /* ── Text-to-speech ──────────────────────────────────────────── */
-export interface TtsAlignment {
-    characters: string[];
-    character_start_times_seconds: number[];
-    character_end_times_seconds: number[];
+export interface StreamAudioChunk {
+    data: string; // base64-encoded audio
+    mimeType: string;
+    sampleRate: number;
+    channels: number;
 }
 
-export interface TtsSynthesisResult {
-    audioBase64: string;
-    alignment: TtsAlignment | null;
+export interface StreamSpeechHandlers {
+    onAudio: (chunk: StreamAudioChunk) => void;
 }
 
-export async function synthesizeSpeech(text: string, signal?: AbortSignal) {
-    return request<TtsSynthesisResult>('/tts/synthesize', {
+/**
+ * Opens a streaming TTS session. Resolves when the server sends `done`.
+ * The server relays newline-delimited JSON: audio chunks, an error event, then
+ * `done`. Throws if the request fails or the server reports an error.
+ */
+export async function streamSpeech(
+    text: string,
+    handlers: StreamSpeechHandlers,
+    signal?: AbortSignal
+): Promise<void> {
+    const token = localStorage.getItem('easyread_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    headers['Content-Type'] = 'application/json';
+
+    const res = await fetch(`${API_BASE}/tts/stream`, {
         method: 'POST',
+        headers,
         body: JSON.stringify({ text }),
         signal,
-    }, { skipAuthExpiry: true });
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(err.message || `Request failed (${res.status})`);
+    }
+    if (!res.body) {
+        throw new Error('Streaming responses are not supported by this browser.');
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (!line) continue;
+
+            let message: { type?: string; message?: string } & Partial<StreamAudioChunk>;
+            try {
+                message = JSON.parse(line);
+            } catch {
+                continue; // Ignore malformed lines defensively.
+            }
+
+            if (message.type === 'audio' && typeof message.data === 'string') {
+                handlers.onAudio({
+                    data: message.data,
+                    mimeType: message.mimeType || 'audio/l16',
+                    sampleRate: message.sampleRate || 24000,
+                    channels: message.channels || 1,
+                });
+            } else if (message.type === 'error') {
+                throw new Error(message.message || 'TTS stream failed.');
+            } else if (message.type === 'done') {
+                return;
+            }
+        }
+    }
 }
