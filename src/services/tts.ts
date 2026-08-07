@@ -28,6 +28,8 @@ export interface TtsControllerCallbacks {
 const DEFAULT_CHUNK_SIZE = 4000;
 const WORD_SPLIT_THRESHOLD = 12;
 const DEFAULT_SAMPLE_RATE = 24000;
+/** Seconds of audio to accumulate before handing a playable segment to the queue. */
+const SEGMENT_TARGET_SECONDS = 1.5;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -248,23 +250,27 @@ function decodePcmDelta(chunk: StreamAudioChunk): { channelData: Float32Array[];
 interface PendingChunk {
     text: string;
     offset: number;
-    channelData: SampleBuffer[];
+    /** In-flight segment accumulation; null while no deltas are pending. */
+    accumulator: SampleBuffer[] | null;
     sampleRate: number;
     channels: number;
+    /** Seconds of audio received so far (finalized segments + accumulator). */
+    receivedSeconds: number;
     done: boolean;
 }
 
 interface PlayableChunk {
-    buffer: AudioBuffer | null;
+    buffer: AudioBuffer;
     text: string;
     offset: number;
+    chunkIndex: number;
+    /** Seconds into the chunk's audio timeline where this segment starts. */
+    startInChunk: number;
 }
 
 interface ActiveSource {
     source: AudioBufferSourceNode;
-    buffer: AudioBuffer;
-    text: string;
-    offset: number;
+    piece: PlayableChunk;
     startTime: number;
 }
 
@@ -274,6 +280,8 @@ export class TtsController {
     private chunks: TextChunk[] = [];
     private pendingChunks: PendingChunk[] = [];
     private readyQueue: PlayableChunk[] = [];
+    /** Cumulative seconds of audio enqueued per chunk (used for highlight mapping). */
+    private chunkEnqueuedSeconds: number[] = [];
     private playing: ActiveSource | null = null;
     private aborted = false;
     private sessionId = 0;
@@ -329,11 +337,13 @@ export class TtsController {
         this.pendingChunks = chunks.map((chunk) => ({
             text: chunk.text,
             offset: chunk.offset,
-            channelData: [],
+            accumulator: null,
             sampleRate: DEFAULT_SAMPLE_RATE,
             channels: 1,
+            receivedSeconds: 0,
             done: false,
         }));
+        this.chunkEnqueuedSeconds = new Array(chunks.length).fill(0);
         this.readyQueue = [];
         this.aborted = false;
         this.sessionId++;
@@ -415,16 +425,24 @@ export class TtsController {
             decoded = await this.decodeDelta(chunk, ctx);
         } catch (err) {
             // If nothing has played for this chunk yet, surface the failure.
-            if (pending.channelData.length === 0) throw err;
+            if (pending.receivedSeconds === 0 && !pending.accumulator) throw err;
             console.error('TTS audio decode error:', err);
             return;
         }
 
         pending.channels = decoded.channels;
         pending.sampleRate = decoded.sampleRate;
+        if (!pending.accumulator) pending.accumulator = [];
         for (let c = 0; c < decoded.channelData.length; c++) {
-            if (!pending.channelData[c]) pending.channelData[c] = new SampleBuffer();
-            pending.channelData[c].append(decoded.channelData[c]);
+            if (!pending.accumulator[c]) pending.accumulator[c] = new SampleBuffer();
+            pending.accumulator[c].append(decoded.channelData[c]);
+        }
+
+        // Start playing as soon as a segment's worth of audio has arrived; do not
+        // wait for the whole chunk to finish streaming.
+        const targetSamples = Math.floor(pending.sampleRate * SEGMENT_TARGET_SECONDS);
+        if ((pending.accumulator[0]?.length ?? 0) >= targetSamples) {
+            this.finalizeSegment(index);
         }
     }
 
@@ -446,25 +464,46 @@ export class TtsController {
         return { channelData, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate };
     }
 
+    /** Turn the accumulated samples into a playable AudioBuffer and queue it. */
+    private finalizeSegment(index: number) {
+        const pending = this.pendingChunks[index];
+        const ctx = this.audioContext;
+        if (!pending || !ctx) return;
+        const accumulator = pending.accumulator;
+        if (!accumulator || (accumulator[0]?.length ?? 0) === 0) {
+            pending.accumulator = null;
+            return;
+        }
+
+        const length = accumulator[0].length;
+        const buffer = new AudioBuffer({
+            numberOfChannels: Math.min(pending.channels, accumulator.length),
+            length,
+            sampleRate: pending.sampleRate,
+        });
+        for (let c = 0; c < buffer.numberOfChannels; c++) {
+            buffer.copyToChannel(accumulator[c].toFloat32Array(), c);
+        }
+        pending.accumulator = null;
+        pending.receivedSeconds += buffer.duration;
+
+        this.readyQueue.push({
+            buffer,
+            text: pending.text,
+            offset: pending.offset,
+            chunkIndex: index,
+            startInChunk: this.chunkEnqueuedSeconds[index],
+        });
+        this.chunkEnqueuedSeconds[index] += buffer.duration;
+        this.playNext();
+    }
+
     private finalizeChunk(index: number) {
         const pending = this.pendingChunks[index];
         if (!pending || pending.done) return;
         pending.done = true;
-
-        const length = pending.channelData[0]?.length ?? 0;
-        const ctx = this.audioContext;
-        if (ctx && length > 0) {
-            const buffer = new AudioBuffer({
-                numberOfChannels: Math.min(pending.channels, pending.channelData.length),
-                length,
-                sampleRate: pending.sampleRate,
-            });
-            for (let c = 0; c < buffer.numberOfChannels; c++) {
-                buffer.copyToChannel(pending.channelData[c].toFloat32Array(), c);
-            }
-            this.readyQueue.push({ buffer, text: pending.text, offset: pending.offset });
-        }
-        this.playNext();
+        // Flush whatever remains in the accumulator as a final segment.
+        this.finalizeSegment(index);
     }
 
     private playNext() {
@@ -474,7 +513,7 @@ export class TtsController {
 
         while (this.readyQueue.length > 0) {
             const item = this.readyQueue.shift();
-            if (!item || !item.buffer) continue;
+            if (!item) continue;
 
             const source = ctx.createBufferSource();
             source.buffer = item.buffer;
@@ -482,9 +521,7 @@ export class TtsController {
 
             this.playing = {
                 source,
-                buffer: item.buffer,
-                text: item.text,
-                offset: item.offset,
+                piece: item,
                 startTime: ctx.currentTime,
             };
 
@@ -530,6 +567,7 @@ export class TtsController {
         this.playing = null;
         this.readyQueue = [];
         this.pendingChunks = [];
+        this.chunkEnqueuedSeconds = [];
         this.chunks = [];
         this.stopHighlightLoop();
         this.clearHighlight();
@@ -575,13 +613,22 @@ export class TtsController {
         const current = this.playing;
         if (!ctx || !current || !this.charSpanMap) return;
 
-        const elapsed = ctx.currentTime - current.startTime;
-        const duration = current.buffer.duration;
-        const fraction = duration > 0 ? Math.min(1, Math.max(0, elapsed / duration)) : 0;
-        const textIndex = Math.min(current.text.length - 1, Math.floor(fraction * current.text.length));
+        const piece = current.piece;
+        const pending = this.pendingChunks[piece.chunkIndex];
+        if (!pending) return;
 
-        const wordStart = this.baseOffset + current.offset + expandWordStart(current.text, textIndex);
-        const wordEnd = this.baseOffset + current.offset + expandWordEnd(current.text, textIndex);
+        // Position within the chunk's audio timeline: completed segments of this
+        // chunk plus how far the current segment has played.
+        const chunkElapsed = piece.startInChunk + (ctx.currentTime - current.startTime);
+        // Exact once the chunk has finished streaming; otherwise a live estimate
+        // (received audio grows at generation speed, so the ratio stays stable).
+        const receivedSeconds = pending.receivedSeconds + ((pending.accumulator?.[0]?.length ?? 0) / pending.sampleRate);
+        const duration = Math.max(receivedSeconds, chunkElapsed);
+        const fraction = duration > 0 ? Math.min(1, Math.max(0, chunkElapsed / duration)) : 0;
+        const textIndex = Math.min(piece.text.length - 1, Math.floor(fraction * piece.text.length));
+
+        const wordStart = this.baseOffset + piece.offset + expandWordStart(piece.text, textIndex);
+        const wordEnd = this.baseOffset + piece.offset + expandWordEnd(piece.text, textIndex);
         this.applyHighlight(wordStart, wordEnd);
     }
 
