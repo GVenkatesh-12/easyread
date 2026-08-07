@@ -228,23 +228,51 @@ class SampleBuffer {
     }
 }
 
-/** Decode a raw 16-bit little-endian PCM delta (audio/l16 or audio/pcm). */
-function decodePcmDelta(chunk: StreamAudioChunk): { channelData: Float32Array[]; channels: number; sampleRate: number } {
-    const bytes = base64ToUint8Array(chunk.data);
-    const channels = Math.max(1, Math.floor(chunk.channels) || 1);
-    const sampleRate = chunk.sampleRate || DEFAULT_SAMPLE_RATE;
+/** Decode raw 16-bit little-endian PCM bytes into Float32 channel data. */
+function decodeRawPcm(
+    bytes: Uint8Array,
+    channels: number,
+    sampleRate: number,
+): { channelData: Float32Array[]; channels: number; sampleRate: number } {
+    const chan = Math.max(1, Math.floor(channels) || 1);
+    const rate = Math.max(8000, Math.round(sampleRate) || DEFAULT_SAMPLE_RATE);
     const totalSamples = Math.floor(bytes.byteLength / 2);
-    const perChannel = Math.floor(totalSamples / channels);
+    const perChannel = Math.floor(totalSamples / chan);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const channelData: Float32Array[] = [];
-    for (let c = 0; c < channels; c++) {
+    for (let c = 0; c < chan; c++) {
         const out = new Float32Array(perChannel);
         for (let j = 0; j < perChannel; j++) {
-            out[j] = view.getInt16((j * channels + c) * 2, true) / 32768;
+            out[j] = view.getInt16((j * chan + c) * 2, true) / 32768;
         }
         channelData.push(out);
     }
-    return { channelData, channels, sampleRate };
+    return { channelData, channels: chan, sampleRate: rate };
+}
+
+/** Decode a raw 16-bit little-endian PCM delta (audio/l16 or audio/pcm). */
+function decodePcmDelta(chunk: StreamAudioChunk): { channelData: Float32Array[]; channels: number; sampleRate: number } {
+    return decodeRawPcm(base64ToUint8Array(chunk.data), chunk.channels, chunk.sampleRate);
+}
+
+/**
+ * Some proxies label raw PCM as `audio/wav` without an actual WAV container.
+ * Extract the payload of the `data` chunk when a RIFF header is present.
+ */
+function stripWavHeader(bytes: Uint8Array): Uint8Array | null {
+    if (bytes.length < 12 || String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) !== 'RIFF') return null;
+    let offset = 12;
+    while (offset + 8 <= bytes.length) {
+        const id = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+        const size = bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | (bytes[offset + 7] << 24);
+        if (id === 'data') {
+            const end = Math.min(offset + 8 + size, bytes.length);
+            if (end > offset + 8) return bytes.subarray(offset + 8, end).slice();
+            return null;
+        }
+        offset += 8 + size + (size % 2);
+    }
+    return null;
 }
 
 interface PendingChunk {
@@ -285,6 +313,8 @@ export class TtsController {
     private playing: ActiveSource | null = null;
     private aborted = false;
     private sessionId = 0;
+    private segmentsEnqueued = 0;
+    private diagLogged = false;
     private charSpanMap: CharSpanMap | null = null;
     private appliedSpans: Set<HTMLElement> = new Set();
     private rafId: number | null = null;
@@ -345,6 +375,8 @@ export class TtsController {
         }));
         this.chunkEnqueuedSeconds = new Array(chunks.length).fill(0);
         this.readyQueue = [];
+        this.segmentsEnqueued = 0;
+        this.diagLogged = false;
         this.aborted = false;
         this.sessionId++;
         this.abortController = new AbortController();
@@ -420,13 +452,20 @@ export class TtsController {
         const ctx = this.audioContext;
         if (!pending || !ctx) return;
 
+        if (!this.diagLogged) {
+            this.diagLogged = true;
+            console.debug(
+                `[tts] first delta: mimeType=${chunk.mimeType} sampleRate=${chunk.sampleRate} channels=${chunk.channels} bytes=${(chunk.data.length * 3) / 4}`,
+            );
+        }
+
         let decoded: { channelData: Float32Array[]; channels: number; sampleRate: number };
         try {
             decoded = await this.decodeDelta(chunk, ctx);
         } catch (err) {
+            console.debug('[tts] delta decode failed:', err);
             // If nothing has played for this chunk yet, surface the failure.
             if (pending.receivedSeconds === 0 && !pending.accumulator) throw err;
-            console.error('TTS audio decode error:', err);
             return;
         }
 
@@ -456,12 +495,23 @@ export class TtsController {
         }
         // WAV/MP3/OGG deltas: decode via Web Audio.
         const bytes = base64ToUint8Array(chunk.data);
-        const buffer = await ctx.decodeAudioData(bytes.buffer);
-        const channelData: Float32Array[] = [];
-        for (let c = 0; c < buffer.numberOfChannels; c++) {
-            channelData.push(buffer.getChannelData(c).slice());
+        try {
+            const buffer = await ctx.decodeAudioData(bytes.buffer);
+            const channelData: Float32Array[] = [];
+            for (let c = 0; c < buffer.numberOfChannels; c++) {
+                channelData.push(buffer.getChannelData(c).slice());
+            }
+            return { channelData, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate };
+        } catch (err) {
+            // Some sources label raw PCM as audio/wav; fall back to raw decoding
+            // when the container is missing or undecodable.
+            const payload = stripWavHeader(bytes);
+            if (payload) {
+                console.debug(`[tts] ${mime} delta had a RIFF header; decoded as raw PCM`);
+                return decodeRawPcm(payload, chunk.channels, chunk.sampleRate);
+            }
+            throw err;
         }
-        return { channelData, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate };
     }
 
     /** Turn the accumulated samples into a playable AudioBuffer and queue it. */
@@ -495,6 +545,7 @@ export class TtsController {
             startInChunk: this.chunkEnqueuedSeconds[index],
         });
         this.chunkEnqueuedSeconds[index] += buffer.duration;
+        this.segmentsEnqueued++;
         this.playNext();
     }
 
@@ -539,6 +590,9 @@ export class TtsController {
             };
 
             source.start();
+            // The context is created within the user gesture, but re-resume here
+            // in case the browser suspended it before the first segment arrived.
+            if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
             this.setStatus('playing', this.label);
             this.startHighlightLoop();
             return;
@@ -546,6 +600,9 @@ export class TtsController {
     }
 
     private finishPlayback() {
+        if (this.segmentsEnqueued === 0) {
+            this.emitError('The speech service returned no audio for this text.');
+        }
         this.stopInternal();
         this.setStatus('idle', '');
     }

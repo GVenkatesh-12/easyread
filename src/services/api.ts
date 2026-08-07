@@ -295,9 +295,24 @@ export async function streamSpeech(
         throw new Error('Streaming responses are not supported by this browser.');
     }
 
-    const reader = res.body.getReader();
+    // Proxies/CDNs may compress the NDJSON stream even though it is streaming
+    // (browsers cannot opt out of Accept-Encoding). Decompress transparently so
+    // the line parser never sees gzip bytes.
+    let body = res.body;
+    const contentEncoding = res.headers.get('content-encoding')?.toLowerCase();
+    if (contentEncoding && contentEncoding !== 'identity') {
+        console.debug(`[tts] response content-encoding: ${contentEncoding}`);
+        if (contentEncoding === 'br') {
+            throw new Error('TTS stream is Brotli-compressed; configure the server to disable compression for /tts/stream.');
+        }
+        const format = contentEncoding === 'deflate' ? 'deflate' : 'gzip';
+        body = body.pipeThrough(new DecompressionStream(format));
+    }
+
+    const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let lineCount = 0;
 
     for (;;) {
         const { done, value } = await reader.read();
@@ -314,6 +329,10 @@ export async function streamSpeech(
             try {
                 message = JSON.parse(line);
             } catch {
+                lineCount++;
+                if (lineCount === 1) {
+                    console.debug('[tts] first unparseable line:', line.slice(0, 120));
+                }
                 continue; // Ignore malformed lines defensively.
             }
 
