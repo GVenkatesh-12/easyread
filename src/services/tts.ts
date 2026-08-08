@@ -339,6 +339,7 @@ export class TtsController {
 
     constructor(callbacks?: TtsControllerCallbacks) {
         this.callbacks = callbacks ?? {};
+        console.debug('[tts] controller v5 (pre-roll buffered streaming)');
     }
 
     getStatus(): TtsStatus {
@@ -605,6 +606,7 @@ export class TtsController {
             const chunkDone = this.pendingChunks[this.currentChunkIndex]?.done;
             if (!chunkDone && queuedSeconds < PLAY_START_PREROLL_SECONDS) return;
             this.hasStartedPlayback = true;
+            console.debug(`[tts] pre-roll reached (${Math.round(queuedSeconds)}s buffered), starting playback`);
         }
 
         const item = queue.shift();
