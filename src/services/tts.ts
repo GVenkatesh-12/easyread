@@ -25,9 +25,8 @@ export interface TtsControllerCallbacks {
     onError?: (message: string) => void;
 }
 
-// Chunks stay well under the model's few-minute quality envelope: the
-// gemini-3.1-flash-tts-preview docs warn output quality (incl. repetition)
-// drifts on long transcripts. 1500 chars is ~1.5-2 min of speech.
+// Chunks keep per-request latency low and stay well inside the TTS
+// provider's quality envelope; 1500 chars is ~1.5-2 min of speech.
 const DEFAULT_CHUNK_SIZE = 1500;
 const WORD_SPLIT_THRESHOLD = 12;
 const DEFAULT_SAMPLE_RATE = 24000;
