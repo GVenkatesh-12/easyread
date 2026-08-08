@@ -38,6 +38,8 @@ const PLAY_START_PREROLL_SECONDS = 5;
 const EARLY_START_THRESHOLD_SECONDS = 6;
 /** Speech-rate estimate used for highlighting while a chunk is still streaming. */
 const CHARS_PER_SECOND = 14;
+/** Playback speed multiplier (0.95 = slightly slower than natural). */
+const PLAYBACK_RATE = 0.95;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -613,6 +615,7 @@ export class TtsController {
 
         const source = ctx.createBufferSource();
         source.buffer = item.buffer;
+        source.playbackRate.value = PLAYBACK_RATE;
         source.connect(ctx.destination);
 
         this.playing = {
@@ -740,8 +743,9 @@ export class TtsController {
         if (!pending) return;
 
         // Position within the chunk's audio timeline: completed segments of this
-        // chunk plus how far the current segment has played.
-        const chunkElapsed = piece.startInChunk + (ctx.currentTime - current.startTime);
+        // chunk plus how far the current segment has played. `ctx.currentTime`
+        // is real time, so scale by the playback rate to get content time.
+        const chunkElapsed = (piece.startInChunk + (ctx.currentTime - current.startTime)) * PLAYBACK_RATE;
 
         // Duration estimate. While the chunk streams, use a constant speech-rate
         // estimate so the highlight moves forward smoothly; once the chunk is
