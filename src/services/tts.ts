@@ -38,8 +38,8 @@ const PLAY_START_PREROLL_SECONDS = 5;
 const EARLY_START_THRESHOLD_SECONDS = 6;
 /** Speech-rate estimate used for highlighting while a chunk is still streaming. */
 const CHARS_PER_SECOND = 14;
-/** Playback speed multiplier (0.95 = slightly slower than natural). */
-const PLAYBACK_RATE = 0.95;
+/** Playback speed multiplier (0.9 = slightly slower than natural). */
+const PLAYBACK_RATE = 0.9;
 
 const isWhitespace = (c: string) => /\s/.test(c);
 
@@ -329,6 +329,8 @@ export class TtsController {
     private sessionId = 0;
     private segmentsEnqueued = 0;
     private diagLogged = false;
+    /** Speech rate (chars/sec) measured from the last completed chunk. */
+    private measuredCharsPerSecond: number | null = null;
     private charSpanMap: CharSpanMap | null = null;
     private appliedSpans: Set<HTMLElement> = new Set();
     private rafId: number | null = null;
@@ -577,6 +579,11 @@ export class TtsController {
         pending.done = true;
         // Flush whatever remains in the accumulator as a final segment.
         this.finalizeSegment(index);
+        // Calibrate the highlight's speech-rate estimate from this chunk's
+        // actual audio duration so later chunks track the voice closely.
+        if (pending.receivedSeconds > 1 && pending.text.length > 20) {
+            this.measuredCharsPerSecond = pending.text.length / pending.receivedSeconds;
+        }
     }
 
     private playNext() {
@@ -747,15 +754,12 @@ export class TtsController {
         // is real time, so scale by the playback rate to get content time.
         const chunkElapsed = (piece.startInChunk + (ctx.currentTime - current.startTime)) * PLAYBACK_RATE;
 
-        // Duration estimate. While the chunk streams, use a constant speech-rate
-        // estimate so the highlight moves forward smoothly; once the chunk is
-        // done, blend toward the exact duration (monotonic, no jumps).
-        const rateEstimate = piece.text.length / CHARS_PER_SECOND;
-        let duration = rateEstimate;
-        if (pending.done && pending.receivedSeconds > 0) {
-            const blend = Math.min(1, chunkElapsed / pending.receivedSeconds);
-            duration = rateEstimate + (pending.receivedSeconds - rateEstimate) * blend;
-        }
+        // Duration estimate. The exact duration is only known once the chunk
+        // has finished streaming; use it immediately then. While streaming,
+        // estimate from the speech rate (calibrated from prior chunks), which
+        // keeps the highlight moving forward without stalling behind the voice.
+        const rateEstimate = piece.text.length / (this.measuredCharsPerSecond ?? CHARS_PER_SECOND);
+        const duration = pending.done && pending.receivedSeconds > 0 ? pending.receivedSeconds : rateEstimate;
         const fraction = duration > 0 ? Math.min(1, Math.max(0, chunkElapsed / duration)) : 0;
         const textIndex = Math.min(piece.text.length - 1, Math.floor(fraction * piece.text.length));
 
