@@ -797,6 +797,14 @@ export default function ReaderPage() {
                 setShowNotes(false);
                 setShowVocab(false);
             }
+            if (e.key === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                if (document.fullscreenElement) {
+                    void document.exitFullscreen().catch(() => undefined);
+                } else {
+                    void document.documentElement.requestFullscreen().catch(() => undefined);
+                }
+            }
             if (e.key === 'ArrowLeft') goToPage(currentPage - 1);
             if (e.key === 'ArrowRight') goToPage(currentPage + 1);
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
