@@ -149,80 +149,8 @@ export async function deleteVocab(bookId: string, vocabId: string) {
 }
 
 /* ── Dictionary ──────────────────────────────────────────────── */
-interface DictionaryEntry {
-    word?: string;
-    phonetic?: string;
-    phonetics?: Array<{
-        text?: string;
-    }>;
-    meanings?: Array<{
-        partOfSpeech?: string;
-        definitions?: Array<{
-            definition?: string;
-        }>;
-    }>;
-}
-
-export interface DictionaryMeaning {
-    partOfSpeech: string;
-    definitions: string[];
-}
-
-export interface DictionaryLookupResult {
-    word: string;
-    phonetic: string;
-    primaryDefinition: string;
-    primaryPartOfSpeech: string;
-    meanings: DictionaryMeaning[];
-    vocabDefinition: string;
-}
-
-export async function lookupWordDefinition(word: string) {
-    const trimmed = word.trim().toLowerCase();
-    if (!trimmed) {
-        throw new Error('Word is required');
-    }
-
-    const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(trimmed)}`);
-    if (!response.ok) {
-        throw new Error('Word not found');
-    }
-
-    const data = (await response.json()) as DictionaryEntry[];
-    const firstEntry = data[0];
-    const meanings = (firstEntry?.meanings || [])
-        .map((meaning) => ({
-            partOfSpeech: meaning.partOfSpeech || '',
-            definitions: (meaning.definitions || [])
-                .map((definition) => definition.definition?.trim() || '')
-                .filter(Boolean),
-        }))
-        .filter((meaning) => meaning.definitions.length > 0);
-
-    const firstMeaning = meanings[0];
-    const firstDefinition = firstMeaning?.definitions[0];
-
-    if (!firstDefinition) {
-        throw new Error('Definition not found');
-    }
-
-    const vocabDefinition = meanings
-        .slice(0, 3)
-        .map((meaning) => {
-            const summary = meaning.definitions.slice(0, 2).join('; ');
-            return meaning.partOfSpeech ? `${meaning.partOfSpeech}: ${summary}` : summary;
-        })
-        .join(' | ');
-
-    return {
-        word: firstEntry?.word?.trim().toLowerCase() || trimmed,
-        phonetic: firstEntry?.phonetic || firstEntry?.phonetics?.find((item) => item.text)?.text || '',
-        primaryDefinition: firstDefinition,
-        primaryPartOfSpeech: firstMeaning?.partOfSpeech || '',
-        meanings,
-        vocabDefinition,
-    };
-}
+export type { DictionaryMeaning, DictionaryLookupResult } from './dictionary';
+export { lookupWordDefinition } from './dictionary';
 
 /* ── Notes ────────────────────────────────────────────────────── */
 export async function getNotes(bookId: string) {
